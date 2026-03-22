@@ -1,20 +1,55 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "diplomka"
 version = "0.1.0"
 description = ""
 readme = "README.md"
-requires-python = ">=3.9"
+# TensorFlow 2.20+ requires NumPy 2.1+ on Python 3.13+; cocopp 2.6.3 needs NumPy 1.x (`np.Inf`).
+requires-python = ">=3.9,<3.13"
 dependencies = [
     "cma==3.4.0",
     "cmaes==0.10.0",
     "coco-experiment==2.6.99rc2",
     "cocopp==2.6.3",
+    "numpy<2",
     "ruff>=0.14.10",
     "tensorflow>=2.20.0",
     "ty>=0.0.5",
     "seaborn",
-    "pandas", 
+    "pandas",
     "tensorflow",
     "scipy",
     "scikit-posthocs",
+    "mlflow>=3.1.4",
+    "scikit-learn>=1.6.1",
 ]
+
+[project.scripts]
+coco = "main:coco_gen"
+optim = "main:execute_optimization"
+
+# Install top-level modules and the `doe2vec` tree so console scripts resolve.
+[tool.setuptools]
+py-modules = [
+    "AE",
+    "GP",
+    "VAE",
+    "cma_custom",
+    "evo",
+    "example",
+    "graph_it",
+    "main",
+    "models",
+    "pd_cols",
+    "progress_bar",
+    "ranks",
+    "rbf_layer",
+    "storage",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+namespaces = true

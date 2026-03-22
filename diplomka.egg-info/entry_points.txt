@@ -1,0 +1,3 @@
+[console_scripts]
+coco = main:coco_gen
+optim = main:execute_optimization

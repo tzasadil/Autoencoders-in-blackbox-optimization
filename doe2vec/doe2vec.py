@@ -10,22 +10,10 @@ import numpy as np
 import pandas as pd
 import sklearn.preprocessing
 import tensorflow as tf
-from datasets import load_dataset
-from huggingface_hub import from_pretrained_keras
 from matplotlib import cm
-from mpl_toolkits import mplot3d
 from numpy.random import seed
 from scipy.stats import qmc
-import sklearn
 from sklearn import manifold
-from sklearn.metrics import accuracy_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import NearestNeighbors
-import tensorflow
-from tensorflow.keras import layers, losses
-from tensorflow.keras.models import Model
-from timeit import default_timer as timer
-import itertools
 import math
 # from doe2vec import bbobbenchmarks as bbob
 from doe2vec.vae import VAE
@@ -36,7 +24,6 @@ from concurrent.futures import ProcessPoolExecutor
 
 from scipy.spatial import distance_matrix
 from scipy.optimize import linear_sum_assignment
-from multiprocessing import Process, Pipe
 
 def no_descs(ax):
         for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
@@ -118,18 +105,18 @@ class doe_model:
         # self.worker_conns, child_conns = list(zip(*[Pipe() for _ in range(worker_n)]))
         # self.eval_workers = [Process(target=evaluator, args=(conn,)) for conn in child_conns]
         # for p in self.eval_workers: p.start()
-        
-    
+
+
         self.train_epochs = 1
         self.old_xs = None
-        
+
 
     def __str__(self):
         return f'doe_{self.inp_size_base}_{self.latent_dim}'
-    
+
     def reset(self, dim):
         self.inp_size = int(dim*self.inp_size_base)
-        # self.autoencoder.load_weights(f'{self.model_save_path}.h5') 
+        # self.autoencoder.load_weights(f'{self.model_save_path}.h5')
         self.autoencoder = VAE(int(self.latent_dim*dim), self.inp_size, kl_weight=self.kl_weight)
         self.autoencoder.compile(optimizer="adam")
         self.distances = []
@@ -146,10 +133,10 @@ class doe_model:
             else:
                 self.functions = self.generate_functions(self.gen_x_sample(10), self.functions)
                 np.save(f"{self.fun_save_path}", self.functions)
-        
+
         self.loaded = True
         return self
-    
+
     def generate_functions(self, array_x, provided_functions=[]):
         def fun_gen():
             if provided_functions is not None:
@@ -162,11 +149,11 @@ class doe_model:
                 fun = '('+fun + ')[:,0]'
                 yield fun
 
-        functions = [] 
+        functions = []
         orig_settings = np.seterr(all='raise')
         if not sys.warnoptions:
             warnings.simplefilter("ignore")
-        iters = 0 
+        iters = 0
         for fun in fun_gen():
             iters_per_succ = iters/max(len(functions),1)
             if len(functions) >= self.n_functions: break
@@ -180,14 +167,14 @@ class doe_model:
                     or np.any(abs(array_y) < 1e-8)
                     or np.any(abs(array_y) > 1e8)
                     or len(np.unique(array_y)) < len(array_y)/1.5):
-                        continue 
+                        continue
                 if (np.var(array_y) < 1.0):
                     if (np.var(array_y*10) < 1.0):
                         continue
                     else:
                         fun = '10*('+fun+')'
                 functions.append(fun)
-            except Exception as inst: 
+            except Exception as inst:
                 continue
         warnings.simplefilter("default")
         np.seterr(**orig_settings)
@@ -221,7 +208,7 @@ class doe_model:
         svm = np.sum(valid_mask)
         if svm/len(valid_mask) < 0.9:
             print()
-            
+
         self.functions = self.functions[valid_mask]
         y = y[valid_mask,:]
         return y
@@ -248,7 +235,7 @@ class doe_model:
                 validation_data=((te:=tf.cast(self.Y[-50:], tf.float32)),te),
                 **kwargs
             )
-    
+
     def train(self, train_x, train_y,opt=None):
         # self.approximation = lambda a: np.random.default_rng().random(a.shape[0])
         # return
@@ -256,8 +243,8 @@ class doe_model:
         # mn = np.min(train_y)
         # mx = np.max(train_y)
         # train_y = (train_y - mn) / (mx-mn+(1e-4))
-        # train_y = np.clip(train_y, 0.01, 0.99)  
-        
+        # train_y = np.clip(train_y, 0.01, 0.99)
+
         # closest_xs = np.array(train_x)[-self.inp_size:]
         # closest_ys = np.array(train_y)[-self.inp_size:]
 
@@ -269,7 +256,7 @@ class doe_model:
         eu_dist = np.linalg.norm(train_x - opt._mean.reshape([1,-1]), axis=1)
         dists_i = np.argsort(eu_dist)[:self.inp_size]
         closest_xs, closest_ys = train_x[dists_i], train_y[dists_i]
-        
+
 
 
         xs = np.clip((closest_xs+5)/10,0.01, 0.99)
@@ -291,7 +278,7 @@ class doe_model:
         else:
             self.old_xs = xs
         self.Y = self.eval_functions(self.old_xs)
-        
+
         # mn = np.min(y,axis=-1, keepdims=True)
         # mx = np.max(y,axis=-1, keepdims=True)
         # y = (y - mn) / ((mx - mn)+1e-4)
@@ -300,8 +287,8 @@ class doe_model:
         mx = np.max(self.Y,axis=-1, keepdims=True)
         self.Y = (self.Y - mn) / (mx-mn+(1e-4))
         self.Y = np.clip(self.Y, 0.01, 0.99)
-        
-        
+
+
         # end_time = timer()
         # elapsed = end_time - start_time
         # print(f"evaluate funcs time: {elapsed}")
@@ -317,7 +304,7 @@ class doe_model:
 
     def __call__(self, xs):
         return self.approximation(xs)
-    
+
     def approximate(self, array_y, scale_inp=True):
         # y evaluated from training funcs
         training_latent = self.encode(self.Y)
@@ -325,14 +312,14 @@ class doe_model:
         # enc_max = np.max(training_latent,axis=0, keepdims=True)
         # training_latent = (training_latent - enc_min) / ((enc_max - enc_min)+1e-4)
         # mn = np.mean(training_latent,axis=0, keepdims=True)
-        # std = np.std(training_latent,axis=0, keepdims=True) 
+        # std = np.std(training_latent,axis=0, keepdims=True)
         # std = np.where(std==0, 1e-4, std)
         # training_latent = (training_latent - mn) / std # scale each column of the latent dim to make the nearestneighbor consider each node equally
-       
+
         # y from the evo algorithm
         assert(len(array_y.shape)==1)
         latent = self.encode(array_y)
-        if len(latent.shape)==1: 
+        if len(latent.shape)==1:
             latent = latent.reshape(1, -1)
         # latent = (latent - enc_min) / ((enc_max - enc_min)+1e-4)
         # latent = (latent - mn) / std
@@ -356,7 +343,7 @@ class doe_model:
             e = best_approx_f(array_x)
             return e[0] if added_dim else e
         return run_approx, mindist
-    
+
     def encode(self, y:np.ndarray):
         """Encode a Design of Experiments.
 
@@ -366,17 +353,17 @@ class doe_model:
         Returns:
             array: encoded feature vector.
         """
-        
+
         if len(y.shape) == 1:
             y = y.reshape((1,-1))
-        
+
         y_ = tf.cast(y, tf.float32)
         encoded_doe, _, __ = self.autoencoder.encoder(y_)
         encoded_doe = np.array(encoded_doe)
         encoded_doe = np.squeeze(encoded_doe)
         return encoded_doe
-    
-    
+
+
     def summary(self):
         """Get a summary of the autoencoder model"""
         self.autoencoder.encoder.summary()

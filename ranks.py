@@ -202,9 +202,15 @@ def coco_plot(out_folders):
     
     ### coco plotting 
     # cocopp.genericsettings.background = {None: cocopp.bbob.get_all("2009/")}
+    # npz data may store Windows-style paths (exdata\\algo); Linux needs os.sep.
+    norm = [
+        os.path.normpath(str(p).replace("\\", os.sep))
+        for p in out_folders
+        if not pd.isna(p)
+    ]
     cocopp.genericsettings.isExpensive = True
     cocopp.genericsettings.xlimit_expensive = 250.0
     cocopp.genericsettings.isConv = True
-    cocopp.main(' '.join(out_folders))
+    cocopp.main(" ".join(norm))
     # cocopp.main(observer.result_folder)  # re-run folders look like "...-001" etc
     webbrowser.open("file://" + os.getcwd() + "/ppdata/index.html")
