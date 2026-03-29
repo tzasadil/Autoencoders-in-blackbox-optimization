@@ -40,6 +40,7 @@ import pd_cols
 from doe2vec.doe2vec import doe_model
 import math
 import functools
+import json
 from itertools import takewhile, dropwhile
 
 matplotlib.use("TkAgg")
@@ -72,6 +73,8 @@ if not os.path.exists("./exdata"):
 #
 budget = int(250)  # times dim
 rrr = cocopp.testbedsettings.current_testbed
+DEFAULT_PROBLEM_INFO = "function_indices:1-24 dimensions:2,5,10 instance_indices:1-10"
+DEFAULT_BEST_VAE_CONFIG_PATH = os.path.join("data", "vae_sweep", "best_vae_config.json")
 
 listmap = lambda func, collection: list(map(func, collection))
 
@@ -121,38 +124,73 @@ def plot(df=None):
 note = ""
 
 
-def run(df=None):
-    # global dim, budget
-    problem_info = f"function_indices:1-24 dimensions:2,5,10 instance_indices:1-10"
+def sanitize_name(name):
+    cleaned = "".join(ch for ch in str(name) if ch.isalnum())
+    return cleaned or "nosurrogate"
 
-    vae = lambda layers: (p(models.vae, layers), f"vae{layers}")
-    pca = lambda n: (p(models.pca, n), f"pca{n}")
 
-    elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
-    rbf = lambda layers, gamma: (
-        p(models.rbf_network, layers, gamma),
-        f"rbf{layers}_{gamma}",
+def format_ratio(value):
+    return str(value).replace("-", "m").replace(".", "p")
+
+
+def build_vae_model(latent_layers, train_records, label=None):
+    latent_desc = "x".join(format_ratio(layer) for layer in latent_layers)
+    model_name = label or f"vae_latent_{latent_desc}_inputs_{train_records}"
+    return (
+        p(models.vae, latent_layers),
+        model_name,
+        {"train_records": train_records},
     )
+
+
+def load_best_vae_model(config_path=DEFAULT_BEST_VAE_CONFIG_PATH, label="best_vae"):
+    if not os.path.exists(config_path):
+        return None
+    with open(config_path, "r", encoding="utf-8") as handle:
+        best_config = json.load(handle)
+    latent_layers = best_config["latent_layers"]
+    train_records = int(best_config["train_records"])
+    return build_vae_model(latent_layers, train_records, label=label)
+
+
+def default_configs(include_best_vae=True, best_vae_config_path=DEFAULT_BEST_VAE_CONFIG_PATH):
     gp = p(models.gp, GPK.Matern(nu=5 / 2)), "gp"
     nearest = lambda k: (p(models.nearest, k), f"nn{k}")
-    mlp = lambda nodes: (p(models.mlp, nodes), f"mlp{nodes}")
+    elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
     doe = lambda n_samples, latent: (d := doe_model(n_samples, latent), str(d))
 
-    # ans1 =models.ansamble.create(np.median,[gp, elm(200), rbf([1/2], 1)])
-
     configs = [
-        ## pop_size, evolution_eval_mode, dim_reduction, model,budget, train_num, sort_train, scale_train, cma_sees_approximations
         [None, 4, None, doe(16, 4)],
         [None, 1, None, None],
         [None, 4, None, gp],
         [None, 4, None, nearest(3)],
         [None, 4, None, elm(100)],
-        # [None, 4, None, nearest(1)],
-        # [None, 4, None, nearest(2)],
-        #     [None, 2,None, doe(32, 4)],
-        #     [None, 2,None, doe(32, 16)],
-        #     [None, 2,None, doe(32, 32)],
     ]
+
+    if include_best_vae:
+        best_vae_model = load_best_vae_model(best_vae_config_path)
+        if best_vae_model is not None:
+            configs.append([None, 4, None, best_vae_model])
+
+    return configs
+
+
+def run(
+    df=None,
+    configs=None,
+    problem_info=DEFAULT_PROBLEM_INFO,
+    data_dir=None,
+    result_folder_prefix="",
+    experiment_note=note,
+    include_best_vae=True,
+    best_vae_config_path=DEFAULT_BEST_VAE_CONFIG_PATH,
+):
+    # global dim, budget
+    if configs is None:
+        configs = default_configs(
+            include_best_vae=include_best_vae,
+            best_vae_config_path=best_vae_config_path,
+        )
 
     # for mult in [2,4,6,8,12,16]:
     #     for pop in [2,4,6,8,12,16]:
@@ -163,19 +201,40 @@ def run(df=None):
     #         configs.append([pop,best_k(1.0/8),None,model,budget, 200, False, False,False])
 
     for config in configs:
-        res = single_config(config, problem_info, df=df)
-        df = pd.concat([df, res], ignore_index=True)
+        res = single_config(
+            config,
+            problem_info,
+            df=df,
+            data_dir=data_dir,
+            result_folder_prefix=result_folder_prefix,
+            experiment_note=experiment_note,
+        )
+        df = res if df is None else pd.concat([df, res], ignore_index=True)
 
     evo.last_cached_doe = None
     return df
 
 
-def single_config(config, problem_info, df=None):
+def single_config(
+    config,
+    problem_info,
+    df=None,
+    data_dir=None,
+    result_folder_prefix="",
+    experiment_note=note,
+):
     global cached_doe_functions, budget
     pop_size, gen_mult, dim_red, model = config
     pop_size = int(pop_size) if pop_size is not None else pop_size
     (dim_red_f, dim_red_name) = dim_red if dim_red else (None, "")
-    (model_f, model_name) = model if model else (None, "")
+    surrogate_kwargs = {}
+    if model:
+        model_f = model[0]
+        model_name = model[1]
+        if len(model) > 2:
+            surrogate_kwargs = model[2]
+    else:
+        (model_f, model_name) = (None, "")
     pop_size = pop_size if pop_size is not None else "None"
     full_desc = (
         f"{pop_size}_{gen_mult}"
@@ -183,16 +242,15 @@ def single_config(config, problem_info, df=None):
         + f"{dim_red_name}"
         + ("_" if len(model_name) > 0 else "")
         + f"{model_name}_"
-        + f"{note}"
+        + f"{experiment_note}"
     )
+    sanitized_model_name = sanitize_name(model_name) if len(model_name) > 0 else "nosurrogate"
     opts = {
-        "algorithm_name": "".join(takewhile(lambda s: s.isalnum(), model_name))
-        if len(model_name) > 0
-        else "no surrogate",
+        "algorithm_name": sanitized_model_name if len(model_name) > 0 else "no_surrogate",
         "algorithm_info": '"autoencoder_surrogate"',
-        "result_folder": "".join(takewhile(lambda s: s.isalnum(), model_name))
+        "result_folder": f"{result_folder_prefix}{sanitized_model_name}"
         if len(model_name) > 0
-        else "no surrogate",
+        else f"{result_folder_prefix}no_surrogate",
     }
 
     suite = cocoex.Suite("bbob", "", problem_info)
@@ -201,12 +259,14 @@ def single_config(config, problem_info, df=None):
     df_filtered = df
 
     # filter already done experiments to find those same as this one
-    if df_filtered is not None:
-        vals = [pop_size, gen_mult, model_name, dim_red_name, budget, note]
+    if df_filtered is not None and set(pd_cols.all_cols).issubset(df_filtered.columns):
+        vals = [pop_size, gen_mult, model_name, dim_red_name, budget, experiment_note]
         assert len(pd_cols.determining_cols) == len(vals)
         df_filtered = df
         for n, v in zip(pd_cols.determining_cols, vals):
             df_filtered = df_filtered[df_filtered[n] == v]
+    else:
+        df_filtered = None
 
     results = []
     for problem in suite:
@@ -230,7 +290,7 @@ def single_config(config, problem_info, df=None):
             cached_doe_functions = model_f.functions
             surrogate.executor = threadpool
         else:
-            surrogate = models.Surrogate(model_f, dim_red_f)
+            surrogate = models.Surrogate(model_f, dim_red_f, **surrogate_kwargs)
         observer.observe(problem)
         start_time = timer()
         pop_none = 5 * dim
@@ -268,14 +328,14 @@ def single_config(config, problem_info, df=None):
             observer.result_folder,
             timestamp,
             budget,
-            note if gen_mult != 1 else "",
+            experiment_note if gen_mult != 1 else "",
             spearman_corr,
             spearman_pval,
             dists,
         ]
         ddff = pd.DataFrame({k: v for (k, v) in zip(pd_cols.all_cols, unzip([df_row]))})
         dsc = pd_cols.get_storage_desc(ddff)
-        storage.store_data(ddff, dsc)
+        storage.store_data(ddff, dsc, data_dir=data_dir)
         results.append(df_row)
 
     if isinstance(model_f, doe_model):

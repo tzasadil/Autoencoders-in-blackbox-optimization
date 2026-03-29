@@ -36,7 +36,7 @@ def vae(l,x,model):
     if model == None:
         model= VAE.VAE(d,l)
         model.compile()
-    model.fit(x,x,batch_size = int(x.shape[0]/10),epochs=2,verbose=0)
+    model.fit(x,x,batch_size = max(1, int(x.shape[0]/10)),epochs=2,verbose=0)
     return model
 
 
@@ -145,11 +145,11 @@ def nearest(k,x,y,model):
 
 
 class Surrogate:
-    def __init__(self,model_f,dim_red_f, min_pop=0):
+    def __init__(self,model_f,dim_red_f, min_pop=0, train_records=200):
         self.is_id = model_f is None and dim_red_f is None
         self.model_f = model_f if model_f != None else lambda x,y,m: lambda a: a[:,0]
         self.dim_red_f = dim_red_f if dim_red_f != None else lambda x,m: lambda a: a
-        self.train_records = 200
+        self.train_records = train_records
         self.model = None
         self.dim_red = None
         self.min_pop = min_pop

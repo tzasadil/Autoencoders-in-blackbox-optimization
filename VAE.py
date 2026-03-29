@@ -9,7 +9,7 @@ class VAE(tf.keras.Model):
     """Convolutional variational autoencoder."""
     def __init__(self, inp_size,layer_sizes):
         super(VAE, self).__init__()
-        layer_sizes = [int(n*inp_size) for n in layer_sizes]
+        layer_sizes = [max(1, int(round(n * inp_size))) for n in layer_sizes]
         self.latent_dim = int(layer_sizes[-1])
         activation = 'relu'
 
