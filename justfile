@@ -5,6 +5,9 @@ run:
 sweep-doe:
   uv run python doe_sweep.py
 
+plots-doe-sweep:
+  uv run python doe_sweep_plots.py
+
 sweep-vae:
   just sweep-doe
 
