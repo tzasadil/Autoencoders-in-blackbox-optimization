@@ -2,8 +2,11 @@
 run:
   uv run python main.py
 
+sweep-doe:
+  uv run python doe_sweep.py
+
 sweep-vae:
-  uv run python vae_sweep.py
+  just sweep-doe
 
 optim:
   uv run optim
@@ -11,6 +14,9 @@ optim:
 coco:
   uv run coco
 
-compare-with-best-vae:
-  just sweep-vae
+compare-with-best-doe:
+  just sweep-doe
   just optim
+
+compare-with-best-vae:
+  just compare-with-best-doe

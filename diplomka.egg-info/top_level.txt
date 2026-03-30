@@ -4,6 +4,7 @@ VAE
 cma_custom
 data
 doe2vec
+doe_saves
 evo
 example
 exdata
@@ -13,6 +14,7 @@ main
 models
 nearest_f_plot
 pd_cols
+ppdata
 progress_bar
 ranks
 rbf_layer

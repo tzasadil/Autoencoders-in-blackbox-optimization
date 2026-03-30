@@ -75,6 +75,7 @@ budget = int(250)  # times dim
 rrr = cocopp.testbedsettings.current_testbed
 DEFAULT_PROBLEM_INFO = "function_indices:1-24 dimensions:2,5,10 instance_indices:1-10"
 DEFAULT_BEST_VAE_CONFIG_PATH = os.path.join("data", "vae_sweep", "best_vae_config.json")
+DEFAULT_BEST_DOE_CONFIG_PATH = os.path.join("data", "doe_sweep", "best_doe_config.json")
 
 listmap = lambda func, collection: list(map(func, collection))
 
@@ -133,6 +134,15 @@ def format_ratio(value):
     return str(value).replace("-", "m").replace(".", "p")
 
 
+def build_gp_model():
+    return p(models.gp, GPK.Matern(nu=5 / 2)), "gp"
+
+
+def build_doe_model(n_samples, latent_dim, label=None):
+    model = doe_model(n_samples, latent_dim)
+    return model, label or str(model)
+
+
 def build_vae_model(latent_layers, train_records, label=None):
     latent_desc = "x".join(format_ratio(layer) for layer in latent_layers)
     model_name = label or f"vae_latent_{latent_desc}_inputs_{train_records}"
@@ -153,24 +163,33 @@ def load_best_vae_model(config_path=DEFAULT_BEST_VAE_CONFIG_PATH, label="best_va
     return build_vae_model(latent_layers, train_records, label=label)
 
 
-def default_configs(include_best_vae=True, best_vae_config_path=DEFAULT_BEST_VAE_CONFIG_PATH):
-    gp = p(models.gp, GPK.Matern(nu=5 / 2)), "gp"
+def load_best_doe_model(config_path=DEFAULT_BEST_DOE_CONFIG_PATH, label="best_doe"):
+    if not os.path.exists(config_path):
+        return None
+    with open(config_path, "r", encoding="utf-8") as handle:
+        best_config = json.load(handle)
+    n_samples = int(best_config["n_samples"])
+    latent_dim = int(best_config["latent_dim"])
+    return build_doe_model(n_samples, latent_dim, label=label)
+
+
+def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
+    gp = build_gp_model()
     nearest = lambda k: (p(models.nearest, k), f"nn{k}")
     elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
-    doe = lambda n_samples, latent: (d := doe_model(n_samples, latent), str(d))
 
     configs = [
-        [None, 4, None, doe(16, 4)],
+        [None, 4, None, build_doe_model(16, 4)],
         [None, 1, None, None],
         [None, 4, None, gp],
         [None, 4, None, nearest(3)],
         [None, 4, None, elm(100)],
     ]
 
-    if include_best_vae:
-        best_vae_model = load_best_vae_model(best_vae_config_path)
-        if best_vae_model is not None:
-            configs.append([None, 4, None, best_vae_model])
+    if include_best_doe:
+        best_doe_model = load_best_doe_model(best_doe_config_path)
+        if best_doe_model is not None:
+            configs.append([None, 4, None, best_doe_model])
 
     return configs
 
@@ -182,14 +201,14 @@ def run(
     data_dir=None,
     result_folder_prefix="",
     experiment_note=note,
-    include_best_vae=True,
-    best_vae_config_path=DEFAULT_BEST_VAE_CONFIG_PATH,
+    include_best_doe=True,
+    best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH,
 ):
     # global dim, budget
     if configs is None:
         configs = default_configs(
-            include_best_vae=include_best_vae,
-            best_vae_config_path=best_vae_config_path,
+            include_best_doe=include_best_doe,
+            best_doe_config_path=best_doe_config_path,
         )
 
     # for mult in [2,4,6,8,12,16]:
@@ -226,13 +245,19 @@ def single_config(
     global cached_doe_functions, budget
     pop_size, gen_mult, dim_red, model = config
     pop_size = int(pop_size) if pop_size is not None else pop_size
-    (dim_red_f, dim_red_name) = dim_red if dim_red else (None, "")
     surrogate_kwargs = {}
+    if dim_red:
+        dim_red_f = dim_red[0]
+        dim_red_name = dim_red[1]
+        if len(dim_red) > 2:
+            surrogate_kwargs.update(dim_red[2])
+    else:
+        (dim_red_f, dim_red_name) = (None, "")
     if model:
         model_f = model[0]
         model_name = model[1]
         if len(model) > 2:
-            surrogate_kwargs = model[2]
+            surrogate_kwargs.update(model[2])
     else:
         (model_f, model_name) = (None, "")
     pop_size = pop_size if pop_size is not None else "None"
