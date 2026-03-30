@@ -71,7 +71,7 @@ class doe_model:
         self,
         inp_size,
         latent_dim,
-        n_functions=50_000,
+        n_functions=250_000,
         seed_nr=0,
         kl_weight=0.001
     ):
@@ -96,6 +96,7 @@ class doe_model:
         self.loaded = False
         self.autoencoder = None
         self.functions = []
+        self.active_functions = []
         self.distances = []
         self.fun_save_path = f'doe_saves/functions.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
@@ -114,11 +115,56 @@ class doe_model:
     def __str__(self):
         return f'doe_{self.inp_size_base}_{self.latent_dim}'
 
+    def _drop_duplicate_points(self, train_x, train_y):
+        if len(train_x) == 0:
+            return train_x, train_y
+        # Repeated evaluations at the same location do not add DOE shape information.
+        _, unique_idx = np.unique(train_x, axis=0, return_index=True)
+        unique_idx = np.sort(unique_idx)
+        return train_x[unique_idx], train_y[unique_idx]
+
+    def _select_diverse_points(self, train_x, train_y, center):
+        if len(train_x) <= self.inp_size:
+            return train_x, train_y
+
+        center = np.asarray(center).reshape(1, -1)
+        dist_to_center = np.linalg.norm(train_x - center, axis=1)
+        # Keep the DOE local to the current CMA state before enforcing diversity.
+        candidate_count = min(len(train_x), max(self.inp_size * 4, self.inp_size + 1))
+        candidate_idx = np.argsort(dist_to_center)[:candidate_count]
+        candidate_x = train_x[candidate_idx]
+        candidate_y = train_y[candidate_idx]
+        candidate_center_dist = dist_to_center[candidate_idx]
+
+        first_idx = int(np.argmin(candidate_center_dist))
+        selected = [first_idx]
+        min_pairwise_dist = np.linalg.norm(
+            candidate_x - candidate_x[first_idx].reshape(1, -1), axis=1
+        )
+
+        while len(selected) < self.inp_size:
+            min_pairwise_dist[selected] = -np.inf
+            # Prefer points that expand x-space coverage, but bias slightly toward the CMA center.
+            score = min_pairwise_dist - 0.05 * candidate_center_dist
+            next_idx = int(np.argmax(score))
+            if not np.isfinite(score[next_idx]):
+                break
+            selected.append(next_idx)
+            dist_to_new = np.linalg.norm(
+                candidate_x - candidate_x[next_idx].reshape(1, -1), axis=1
+            )
+            min_pairwise_dist = np.minimum(min_pairwise_dist, dist_to_new)
+
+        selected = np.array(selected, dtype=int)
+        selected = selected[np.argsort(candidate_center_dist[selected])]
+        return candidate_x[selected], candidate_y[selected]
+
     def reset(self, dim):
         self.inp_size = int(dim*self.inp_size_base)
         # self.autoencoder.load_weights(f'{self.model_save_path}.h5')
         self.autoencoder = VAE(int(self.latent_dim*dim), self.inp_size, kl_weight=self.kl_weight)
         self.autoencoder.compile(optimizer="adam")
+        self.active_functions = []
         self.distances = []
         self.old_xs = None
 
@@ -195,21 +241,28 @@ class doe_model:
     def eval_functions(self, x):
         assert(np.sum(np.logical_or(x<0,x>1))==0)
         array_x = np.clip(x, 0.001, 0.999)
-        windows = list(group_list(self.functions, math.ceil(len(self.functions)/8)))
+        functions = np.asarray(self.functions)
+        if len(functions) == 0:
+            self.active_functions = np.array([], dtype=object)
+            return np.empty((0, len(array_x)))
+
+        windows = list(group_list(functions, math.ceil(len(functions)/8)))
 
 
         y = self.executor.map(eval_multiple, windows, [array_x]*len(windows))
         y = [arr for arrs in list(y) for arr in arrs]  #flatten
-        mask = [a is not None for a in y]
-        y= np.array([a for a in y if a is not None])
-        self.functions = self.functions[mask]
+        mask = np.array([a is not None for a in y], dtype=bool)
+        y = np.array([a for a in y if a is not None])
+        active_functions = functions[mask]
 
         valid_mask = np.sum(np.logical_or(np.isnan(y),np.isinf(y)), axis=-1)==0
+        if y.size > 0:
+            valid_mask = np.logical_and(valid_mask, np.ptp(y, axis=-1) > 1e-12)
         svm = np.sum(valid_mask)
         if svm/len(valid_mask) < 0.9:
             print()
 
-        self.functions = self.functions[valid_mask]
+        self.active_functions = active_functions[valid_mask]
         y = y[valid_mask,:]
         return y
 
@@ -223,16 +276,27 @@ class doe_model:
         if self.autoencoder is None:
             raise AttributeError("Autoencoder model is not compiled yet")
 
+        sample_count = int(self.Y.shape[0])
+        if sample_count < 2:
+            raise ValueError("Need at least two valid training functions for DOE autoencoder training")
+
+        val_n = min(val_n, sample_count - 1)
+        train_data = tf.cast(self.Y[:-val_n], tf.float32) if val_n > 0 else tf.cast(self.Y, tf.float32)
+        validation_data = None
+        if val_n > 0:
+            validation = tf.cast(self.Y[-val_n:], tf.float32)
+            validation_data = (validation, validation)
+
         # valid_mask = np.sum(np.logical_or(np.isnan(self.Y),np.isinf(self.Y)), axis=1)==0
         # self.Y = self.Y[valid_mask,:]
         # self.functions = self.functions[valid_mask]
 
         self.autoencoder.fit(
-                tf.cast(self.Y[:-50], tf.float32),
+                train_data,
                 epochs=epochs,
                 batch_size=batch_size,
                 shuffle=True,
-                validation_data=((te:=tf.cast(self.Y[-50:], tf.float32)),te),
+                validation_data=validation_data,
                 **kwargs
             )
 
@@ -249,13 +313,10 @@ class doe_model:
         # closest_ys = np.array(train_y)[-self.inp_size:]
 
         train_x,train_y = np.array(train_x),np.array(train_y)
-        train_y_, inx = np.unique(train_y, return_index=True)
-        train_x_ = np.array(train_x)[inx]
-        if len(inx)>=self.inp_size:
-            train_x, train_y = train_x_, train_y_
-        eu_dist = np.linalg.norm(train_x - opt._mean.reshape([1,-1]), axis=1)
-        dists_i = np.argsort(eu_dist)[:self.inp_size]
-        closest_xs, closest_ys = train_x[dists_i], train_y[dists_i]
+    # Build the DOE from unique points near the current CMA mean, then spread them in x-space.
+        train_x, train_y = self._drop_duplicate_points(train_x, train_y)
+        center = opt._mean if opt is not None and hasattr(opt, '_mean') else np.mean(train_x, axis=0)
+        closest_xs, closest_ys = self._select_diverse_points(train_x, train_y, center)
 
 
 
@@ -278,6 +339,8 @@ class doe_model:
         else:
             self.old_xs = xs
         self.Y = self.eval_functions(self.old_xs)
+        if len(self.active_functions) < 2:
+            raise ValueError("Too few valid DOE functions remained for the current training round")
 
         # mn = np.min(y,axis=-1, keepdims=True)
         # mx = np.max(y,axis=-1, keepdims=True)
@@ -330,7 +393,7 @@ class doe_model:
         i = np.argmin(eu_dists)
         mindist= eu_dists[i]
         print('approx distance', mindist)
-        best_approx_str = self.functions[i]
+        best_approx_str = self.active_functions[i]
         best_approx_f = eval('lambda array_x:'+best_approx_str)
 
 

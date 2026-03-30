@@ -1,9 +1,0 @@
-suite = 'bbob', funcId = 14, DIM = 2, Precision = 1.000e-08, algId = 'gp', coco_version = '2.6.99rc2', logger = 'bbob', data_format = 'bbob-new2'
-%
-data_f14/bbobexp_f14_DIM2.dat, 1:500|7.7e-04, 2:500|4.9e-08, 3:500|9.5e-04, 4:500|2.2e-07, 5:500|2.5e-05, 71:500|1.3e-03, 72:500|5.4e-04, 73:500|4.6e-06, 74:500|1.2e-04, 75:500|5.3e-04
-suite = 'bbob', funcId = 14, DIM = 5, Precision = 1.000e-08, algId = 'gp', coco_version = '2.6.99rc2', logger = 'bbob', data_format = 'bbob-new2'
-%
-data_f14/bbobexp_f14_DIM5.dat, 1:1250|3.8e-04, 2:1250|3.7e-04, 3:1250|6.2e-05, 4:1250|2.0e-04, 5:1250|1.2e-04, 71:1250|1.3e-04, 72:1250|1.7e-04, 73:1250|1.0e-04, 74:1250|1.4e-04, 75:1250|7.3e-05
-suite = 'bbob', funcId = 14, DIM = 10, Precision = 1.000e-08, algId = 'gp', coco_version = '2.6.99rc2', logger = 'bbob', data_format = 'bbob-new2'
-%
-data_f14/bbobexp_f14_DIM10.dat, 1:2500|2.8e-04, 2:2500|6.9e-04, 3:2500|4.3e-04, 4:2500|3.7e-04, 5:2500|3.2e-04, 71:2500|7.9e-04, 72:2500|5.9e-04, 73:2500|3.5e-04, 74:2500|7.8e-04, 75:2500|1.2e-03
