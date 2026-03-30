@@ -8,8 +8,8 @@ import main
 import storage
 
 
-DOE_SAMPLE_VARIANTS = [8, 16, 32, 64]
-DOE_LATENT_VARIANTS = [2, 4, 8, 16]
+DOE_SAMPLE_VARIANTS = [1, 2, 4, 8, 16]
+DOE_LATENT_VARIANTS = [1 ,2, 4, 8, 16]
 SWEEP_DATA_DIR = os.path.join("data", "doe_sweep")
 SWEEP_NOTE = "doe_sweep"
 SWEEP_RESULT_PREFIX = "doe_sweep__"
