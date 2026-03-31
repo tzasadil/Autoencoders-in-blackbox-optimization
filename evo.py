@@ -32,8 +32,32 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
         nonlocal next_specimens_forced
         forced = next_specimens_forced[:size]
         next_specimens_forced = next_specimens_forced[size:]
-        xs = np.array(forced+[optimizer.ask() for _ in range(size-len(forced))])
-        return xs
+        selected = []
+        seen = set()
+
+        def add_if_new(x):
+            key = np.ascontiguousarray(x).tobytes()
+            if key in seen:
+                return False
+            seen.add(key)
+            selected.append(np.array(x, copy=True))
+            return True
+
+        for x in forced:
+            add_if_new(x)
+
+        max_attempts = max(10 * size, size + 10)
+        attempts = 0
+        while len(selected) < size and attempts < max_attempts:
+            add_if_new(optimizer.ask())
+            attempts += 1
+
+        # Exact duplicates are wasted candidates for preselection, but keep a fallback
+        # so candidate generation cannot stall if the sampler collapses numerically.
+        while len(selected) < size:
+            selected.append(np.array(optimizer.ask(), copy=True))
+
+        return np.array(selected)
         
     # if warm_start_task != None:
     #     source_solutions = []

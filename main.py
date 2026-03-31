@@ -179,11 +179,11 @@ def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE
     elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
 
     configs = [
-        [None, 4, None, build_doe_model(16, 4)],
+        [None, 2, None, build_doe_model(2,8)],
         [None, 1, None, None],
-        [None, 4, None, gp],
-        [None, 4, None, nearest(3)],
-        [None, 4, None, elm(100)],
+        [None, 2, None, gp],
+        [None, 2, None, nearest(3)],
+        [None, 2, None, elm(100)],
     ]
 
     if include_best_doe:

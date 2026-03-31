@@ -43,11 +43,11 @@ def summarize_results(df):
         ranked.groupby("model", as_index=False)
         .agg(
             average_rank=("problem_rank", "mean"),
-            mean_final_value=("final_value", "mean"),
-            median_final_value=("final_value", "median"),
-            run_count=("final_value", "size"),
+            # mean_final_value=("final_value", "mean"),
+            # median_final_value=("final_value", "median"),
+            # run_count=("final_value", "size"),
         )
-        .sort_values(["average_rank", "mean_final_value", "model"])
+        .sort_values(["average_rank"])#, "mean_final_value", "model"])
         .reset_index(drop=True)
     )
     return summary

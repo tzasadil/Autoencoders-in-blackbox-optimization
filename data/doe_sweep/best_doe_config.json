@@ -1,0 +1,9 @@
+{
+  "model": "doe_2_8",
+  "label": "best_doe",
+  "n_samples": 2,
+  "latent_dim": 8,
+  "selection_metric": "average_rank",
+  "average_rank": 7.958333333333333,
+  "mean_final_value": -70.34762432379831
+}
