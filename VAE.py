@@ -13,7 +13,7 @@ class VAE(tf.keras.Model):
         self.latent_dim = int(layer_sizes[-1])
         activation = 'relu'
 
-        en_inp = tf.keras.layers.Input(shape=(inp_size))
+        en_inp = tf.keras.layers.Input(shape=(inp_size,))
         reg = 'l2'
         feed = en_inp
         for n in layer_sizes[:-1]:

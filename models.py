@@ -67,7 +67,7 @@ def elm(h,x,y,model):
     h = lambda a: tf.nn.relu(tf.tensordot(a,input_weights,1) + biases)
     # h = lambda a: tf.nn.relu(tf.tensordot(a,input_weights,1) + biases)
     output_weights = tf.tensordot(tf.linalg.pinv(h(tf.cast(x,tf.float32))), tf.cast(y,tf.float32),1)
-    inp = tf.keras.layers.Input(shape=inp_size)
+    inp = tf.keras.layers.Input(shape=(inp_size,))
     outp = tf.tensordot(h(inp),output_weights,1)
     model = tf.keras.Model(inputs=inp,outputs=outp)
     return model
@@ -76,7 +76,7 @@ def rbf_network(layers,gamma,x,y,model):
     d = x.shape[-1]
     layers = [int(d*n) for n in layers]
     if model == None or model.layers[0].input_shape[0][-1] != d:
-        inp = tf.keras.layers.Input(shape=d)
+        inp = tf.keras.layers.Input(shape=(d,))
         feed = inp
         for n in layers:
             feed = RBFLayer(n,InitCentersRandom(x), gamma)(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
@@ -94,7 +94,7 @@ def mlp(layers,x,y,model):
     d = x.shape[-1]
     layers = [int (d*n) for n in layers]
     if model == None or model.layers[0].input_shape[0][-1] != d:
-        inp = tf.keras.layers.Input(shape=d)
+        inp = tf.keras.layers.Input(shape=(d,))
         feed = inp
         for n in map(int,layers):
             feed = tf.keras.layers.Dense(n)(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
