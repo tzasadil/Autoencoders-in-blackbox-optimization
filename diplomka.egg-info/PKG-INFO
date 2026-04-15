@@ -19,4 +19,5 @@ Requires-Dist: scipy
 Requires-Dist: scikit-posthocs
 Requires-Dist: mlflow>=3.1.4
 Requires-Dist: scikit-learn>=1.6.1
+Requires-Dist: statsmodels>=0.14.6
 Dynamic: license-file

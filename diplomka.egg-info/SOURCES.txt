@@ -4,6 +4,8 @@ LICENSE
 README.md
 VAE.py
 cma_custom.py
+control_graphs.py
+control_notebook_lib.py
 evo.py
 example.py
 graph_it.py
@@ -15,6 +17,16 @@ pyproject.toml
 ranks.py
 rbf_layer.py
 storage.py
+control_analysis/__init__.py
+control_analysis/cli.py
+control_analysis/constants.py
+control_analysis/data.py
+control_analysis/formatting.py
+control_analysis/jobs.py
+control_analysis/models.py
+control_analysis/plotting.py
+control_analysis/stats.py
+control_analysis/transforms.py
 diplomka.egg-info/PKG-INFO
 diplomka.egg-info/SOURCES.txt
 diplomka.egg-info/dependency_links.txt

@@ -1,5 +1,5 @@
 /coco
-# /exdata   
+# /exdata
 /ppdata
 __pycache__
 /__pycache__
@@ -14,3 +14,4 @@ doe2vec/__pycache__
 __pycache__/evo.cpython-39.pyc
 __pycache__/main.cpython-39.pyc
 /doe_saves
+.coco_external_build

@@ -2,6 +2,9 @@ AE
 GP
 VAE
 cma_custom
+control_analysis
+control_graphs
+control_notebook_lib
 data
 doe2vec
 doe_saves

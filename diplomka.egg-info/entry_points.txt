@@ -1,3 +1,4 @@
 [console_scripts]
 coco = main:coco_gen
+control-graphs = control_graphs:main
 optim = main:execute_optimization

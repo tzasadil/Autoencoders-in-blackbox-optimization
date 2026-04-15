@@ -25,11 +25,13 @@ dependencies = [
     "scikit-posthocs",
     "mlflow>=3.1.4",
     "scikit-learn>=1.6.1",
+    "statsmodels>=0.14.6",
 ]
 
 [project.scripts]
 coco = "main:coco_gen"
 optim = "main:execute_optimization"
+control-graphs = "control_graphs:main"
 
 # Install top-level modules and the `doe2vec` tree so console scripts resolve.
 [tool.setuptools]
@@ -38,6 +40,8 @@ py-modules = [
     "GP",
     "VAE",
     "cma_custom",
+    "control_graphs",
+    "control_notebook_lib",
     "evo",
     "example",
     "graph_it",

@@ -138,9 +138,20 @@ def build_gp_model():
     return p(models.gp, GPK.Matern(nu=5 / 2)), "gp"
 
 
-def build_doe_model(n_samples, latent_dim, label=None):
-    model = doe_model(n_samples, latent_dim)
+def build_doe_model(n_samples, latent_dim, label=None, **model_kwargs):
+    model = doe_model(n_samples, latent_dim, **model_kwargs)
     return model, label or str(model)
+
+
+def build_plain_doe_model(n_samples, latent_dim, label=None):
+    return build_doe_model(
+        n_samples,
+        latent_dim,
+        label=label or f"doe_plain_{n_samples}_{latent_dim}",
+        preserve_input_order=False,
+        drop_duplicate_points=False,
+        point_selection="local_nearest",
+    )
 
 
 def build_vae_model(latent_layers, train_records, label=None):
@@ -179,11 +190,12 @@ def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE
     elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
 
     configs = [
+        [None, 2, None, elm(100)],
+        [None, 2, None, build_plain_doe_model(2,8)],
         [None, 2, None, build_doe_model(2,8)],
         [None, 1, None, None],
         [None, 2, None, gp],
         [None, 2, None, nearest(3)],
-        [None, 2, None, elm(100)],
     ]
 
     if include_best_doe:

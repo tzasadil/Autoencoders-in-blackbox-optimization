@@ -1,17 +1,20 @@
-
 run:
-  uv run python main.py
+    uv run python main.py
+
+graphs:
+    uv run control-graphs all
 
 sweep-doe:
-  uv run python doe_sweep.py
+    uv run python doe_sweep.py
 
 plots-doe-sweep:
-  uv run python doe_sweep_plots.py
+    uv run python doe_sweep_plots.py
 
 optim:
-  uv run optim
+    uv run optim
 
 coco:
-  uv run coco
+    uv run coco
 
-
+coco-external:
+    uv run python build_external_coco_bundle.py

@@ -73,7 +73,10 @@ class doe_model:
         latent_dim,
         n_functions=250_000,
         seed_nr=0,
-        kl_weight=0.001
+        kl_weight=0.001,
+        preserve_input_order=True,
+        drop_duplicate_points=True,
+        point_selection="local_diverse",
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
@@ -110,6 +113,11 @@ class doe_model:
 
         self.train_epochs = 1
         self.old_xs = None
+        self.preserve_input_order = bool(preserve_input_order)
+        self.drop_duplicate_points = bool(drop_duplicate_points)
+        self.point_selection = point_selection
+        if self.point_selection not in {"local_diverse", "local_nearest"}:
+            raise ValueError(f"Unsupported point_selection: {self.point_selection}")
 
 
     def __str__(self):
@@ -158,6 +166,18 @@ class doe_model:
         selected = np.array(selected, dtype=int)
         selected = selected[np.argsort(candidate_center_dist[selected])]
         return candidate_x[selected], candidate_y[selected]
+
+    def _select_local_points(self, train_x, train_y, center):
+        if len(train_x) <= self.inp_size:
+            return train_x, train_y
+
+        center = np.asarray(center).reshape(1, -1)
+        dist_to_center = np.linalg.norm(train_x - center, axis=1)
+        if self.point_selection == "local_nearest":
+            nearest_idx = np.argsort(dist_to_center)[: self.inp_size]
+            nearest_idx = nearest_idx[np.argsort(dist_to_center[nearest_idx])]
+            return train_x[nearest_idx], train_y[nearest_idx]
+        return self._select_diverse_points(train_x, train_y, center)
 
     def reset(self, dim):
         self.inp_size = int(dim*self.inp_size_base)
@@ -313,10 +333,10 @@ class doe_model:
         # closest_ys = np.array(train_y)[-self.inp_size:]
 
         train_x,train_y = np.array(train_x),np.array(train_y)
-    # Build the DOE from unique points near the current CMA mean, then spread them in x-space.
-        train_x, train_y = self._drop_duplicate_points(train_x, train_y)
+        if self.drop_duplicate_points:
+            train_x, train_y = self._drop_duplicate_points(train_x, train_y)
         center = opt._mean if opt is not None and hasattr(opt, '_mean') else np.mean(train_x, axis=0)
-        closest_xs, closest_ys = self._select_diverse_points(train_x, train_y, center)
+        closest_xs, closest_ys = self._select_local_points(train_x, train_y, center)
 
 
 
@@ -329,16 +349,21 @@ class doe_model:
         closest_ys = (closest_ys - mn) / (mx-mn+(1e-4))
         closest_ys = np.clip(closest_ys, 0.01, 0.99)
 
-        #bipartite matching to minimize changes to inputs of the autoencoder
-        if self.old_xs is not None:
+        # Keep point-to-index correspondence stable only in the improved variant.
+        if self.preserve_input_order and self.old_xs is not None:
             dist_matrix = distance_matrix(self.old_xs, xs)
-            row_ind, col_ind = linear_sum_assignment(dist_matrix)
+            _row_ind, col_ind = linear_sum_assignment(dist_matrix)
             ordered_xs = xs[col_ind]
             closest_ys = closest_ys[col_ind]
             self.old_xs = ordered_xs
-        else:
+            eval_xs = self.old_xs
+        elif self.preserve_input_order:
             self.old_xs = xs
-        self.Y = self.eval_functions(self.old_xs)
+            eval_xs = self.old_xs
+        else:
+            self.old_xs = None
+            eval_xs = xs
+        self.Y = self.eval_functions(eval_xs)
         if len(self.active_functions) < 2:
             raise ValueError("Too few valid DOE functions remained for the current training round")
 
