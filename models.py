@@ -64,13 +64,13 @@ def elm(h,x,y,model):
     hidden_size = int(h*inp_size)
     input_weights = tf.random.normal([inp_size,hidden_size])
     biases = tf.random.normal([hidden_size])
-    h = lambda a: tf.nn.relu(tf.tensordot(a,input_weights,1) + biases)
-    # h = lambda a: tf.nn.relu(tf.tensordot(a,input_weights,1) + biases)
-    output_weights = tf.tensordot(tf.linalg.pinv(h(tf.cast(x,tf.float32))), tf.cast(y,tf.float32),1)
-    inp = tf.keras.layers.Input(shape=(inp_size,))
-    outp = tf.tensordot(h(inp),output_weights,1)
-    model = tf.keras.Model(inputs=inp,outputs=outp)
-    return model
+    hidden = lambda a: tf.nn.relu(tf.tensordot(tf.cast(a,tf.float32),input_weights,1) + biases)
+    output_weights = tf.tensordot(tf.linalg.pinv(hidden(x)), tf.cast(y,tf.float32),1)
+
+    def predict(a):
+        return tf.tensordot(hidden(a),output_weights,1)
+
+    return predict
 
 def rbf_network(layers,gamma,x,y,model): 
     d = x.shape[-1]
@@ -83,7 +83,6 @@ def rbf_network(layers,gamma,x,y,model):
             # feed = tf.nn.relu(feed)
             # feed = tf.keras.layers.Dropout(0.2)(feed)
         outp = tf.keras.layers.Dense(1)(feed)
-        outp = tf.squeeze(outp,-1)
         model = tf.keras.Model(inputs=inp,outputs=outp)
 
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),loss = 'mse')
@@ -97,11 +96,9 @@ def mlp(layers,x,y,model):
         inp = tf.keras.layers.Input(shape=(d,))
         feed = inp
         for n in map(int,layers):
-            feed = tf.keras.layers.Dense(n)(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
-            feed = tf.nn.relu(feed)
+            feed = tf.keras.layers.Dense(n, activation='relu')(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
             # feed = tf.keras.layers.Dropout(0.2)(feed)
         outp = tf.keras.layers.Dense(1)(feed)
-        outp = tf.squeeze(outp,-1)
         model = tf.keras.Model(inputs=inp,outputs=outp)
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),loss = 'mse')
     model.fit(x,y,batch_size = int(x.shape[0]/10),epochs=5,verbose=0)
@@ -158,6 +155,7 @@ class Surrogate:
             if self.is_id: return np.zeros(x.shape[0])
             latent = self.dim_red(x)  # ty:ignore[call-non-callable]
             y = self.model(latent)  # ty:ignore[call-non-callable]
+            y = np.asarray(y).reshape(-1)
             y = np.nan_to_num(y, nan=4.9)
             return y
     
