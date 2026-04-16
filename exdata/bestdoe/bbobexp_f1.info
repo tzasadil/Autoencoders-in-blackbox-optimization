@@ -1,0 +1,3 @@
+suite = 'bbob', funcId = 1, DIM = 2, Precision = 1.000e-08, algId = 'bestdoe', coco_version = '2.6.99rc2', logger = 'bbob', data_format = 'bbob-new2'
+%
+data_f1/bbobexp_f1_DIM2.dat, 1:500|9.0e-09, 2:500|1.2e-08, 3:500|3.1e-09, 4:500|2.9e-08, 5:500|3.5e-08, 71:500|2.1e-09, 72:500|8.0e-08, 73:500|2.8e-08, 74:500|9.1e-09, 75:500|1.3e-08
