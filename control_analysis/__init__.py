@@ -1,12 +1,9 @@
 from control_analysis.data import ControlDataBundle, EvalWindowGraphSpec, compute_control_ranks, df_enhance, load_control_bundle
 from control_analysis.formatting import latex_tabular, print_latex, write_dataframe_tabular, write_latex_table
 from control_analysis.jobs import (
-    plot_dim_red_kind_ranking,
     plot_elapsed_time_by_dim_red_kind,
     plot_full_desc_ranking,
-    plot_gp_dim_reduction,
     plot_gp_true_evaluations_by_population,
-    plot_gp_true_ratio,
     plot_model_comparison,
     plot_pca_ratio_gp,
     plot_pure_population_size,
@@ -59,12 +56,9 @@ __all__ = [
     "load_control_bundle",
     "np_apply_axis0",
     "p",
-    "plot_dim_red_kind_ranking",
     "plot_elapsed_time_by_dim_red_kind",
     "plot_full_desc_ranking",
-    "plot_gp_dim_reduction",
     "plot_gp_true_evaluations_by_population",
-    "plot_gp_true_ratio",
     "plot_model_comparison",
     "plot_pca_ratio_gp",
     "plot_pure_population_size",

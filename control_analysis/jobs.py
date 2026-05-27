@@ -474,11 +474,6 @@ def plot_gp_true_evaluations_by_population(bundle: ControlDataBundle, output_dir
     return save_and_show("gp_true_evaluations_by_population", show=False, output_dir=output_dir)
 
 
-def plot_gp_dim_reduction(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    df = bundle.df_og.copy()
-    df = df[df["model"] == "gp"]
-    bar(df, "dim_red")
-    return save_and_show("gp_dim_reduction", show=False, output_dir=output_dir)
 
 
 def plot_elapsed_time_by_dim_red_kind(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
@@ -495,36 +490,18 @@ def plot_model_comparison(bundle: ControlDataBundle, output_dir: str | os.PathLi
     return save_and_show("model_comparison", show=False, output_dir=output_dir)
 
 
-def plot_dim_red_kind_ranking(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    bar(bundle.df_og.copy(), "dim_red_kind")
-    return save_and_show("dim_red_kind_ranking", show=False, output_dir=output_dir)
 
 
-def plot_gp_true_ratio(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    df = bundle.df_og.copy()
-    df = df[(df["model"] == "gp") & (df["dim_red_kind"] == "none")]
-    ax = bar(df, "true_ratio", index_mapper=lambda value: Fraction(value))
-    ax.set_label("dim red, true evals, aux evals")
-    ax.set_xlabel("truly evaluated fraction of population")
-    ax.set_ylabel("rank percentile avg")
-    labels = [item.get_text() for item in ax.get_xticklabels()]
-    if len(labels) > 1:
-        labels[1] = "1/12"
-        ax.set_xticklabels(labels)
-    return save_and_show("gp_true_ratio", show=False, output_dir=output_dir)
+
 
 
 NAMED_PLOT_JOBS = {
     "full_desc_ranking": plot_full_desc_ranking,
-    "true_ratio_ranking": plot_true_ratio_ranking,
     "pure_population_size": plot_pure_population_size,
     "pca_ratio_gp": plot_pca_ratio_gp,
     "gp_true_evaluations_by_population": plot_gp_true_evaluations_by_population,
-    "gp_dim_reduction": plot_gp_dim_reduction,
     "elapsed_time_by_dim_red_kind": plot_elapsed_time_by_dim_red_kind,
     "model_comparison": plot_model_comparison,
-    "dim_red_kind_ranking": plot_dim_red_kind_ranking,
-    "gp_true_ratio": plot_gp_true_ratio,
 }
 
 
