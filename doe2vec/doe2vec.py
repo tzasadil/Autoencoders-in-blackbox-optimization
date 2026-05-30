@@ -1,4 +1,4 @@
-import os.path
+import os
 import sys
 import warnings
 from dataclasses import dataclass
@@ -22,7 +22,7 @@ from doe2vec.vae import VAE
 from doe2vec.modulesRandFunc import generate_exp2fun as genExp2fun
 from doe2vec.modulesRandFunc import generate_tree as genTree
 from doe2vec.modulesRandFunc import generate_tree2exp as genTree2exp
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from scipy.spatial import distance_matrix
 from scipy.optimize import linear_sum_assignment, minimize
@@ -69,11 +69,129 @@ def group_list(l, group_size):
         yield l[i:i+group_size]
 
 
+def _zscore_row_static(values):
+    values = np.asarray(values, dtype=float).reshape(-1)
+    std = np.std(values)
+    if not np.isfinite(std) or std <= 1e-12:
+        return np.zeros_like(values)
+    return (values - np.mean(values)) / std
+
+
+def _rotation_pairs_static(dim):
+    return [(left, right) for left in range(dim - 1) for right in range(left + 1, dim)]
+
+
+def _rotation_matrix_static(dim, angles, angle_pairs):
+    rotation = np.eye(dim)
+    for angle, (left, right) in zip(angles, angle_pairs):
+        cosine = np.cos(angle)
+        sine = np.sin(angle)
+        givens = np.eye(dim)
+        givens[left, left] = cosine
+        givens[left, right] = -sine
+        givens[right, left] = sine
+        givens[right, right] = cosine
+        rotation = givens @ rotation
+    return rotation
+
+
+def _apply_transform_static(unit_xs, center_unit, translation, angles, angle_pairs):
+    centered = unit_xs - center_unit.reshape(1, -1)
+    rotation = _rotation_matrix_static(unit_xs.shape[1], angles, angle_pairs)
+    transformed = center_unit.reshape(1, -1) + translation.reshape(1, -1) + centered @ rotation.T
+    return np.clip(transformed, 0.01, 0.99)
+
+
+def _fit_function_transform_worker(task):
+    (
+        function_idx,
+        function,
+        compiled_function,
+        unit_xs,
+        target_values,
+        center_unit,
+        translation_bound,
+        transform_maxfev,
+        cached_params,
+    ) = task
+    if compiled_function is None:
+        return None
+
+    dim = unit_xs.shape[1]
+    angle_pairs = _rotation_pairs_static(dim)
+    target_z = _zscore_row_static(target_values)
+    bounds = [(-translation_bound, translation_bound)] * dim + [(-math.pi, math.pi)] * len(angle_pairs)
+    zero_params = np.zeros(dim + len(angle_pairs), dtype=float)
+    initial_params = (
+        np.asarray(cached_params, dtype=float).copy()
+        if cached_params is not None and len(cached_params) == len(zero_params)
+        else zero_params.copy()
+    )
+
+    def evaluate_params(params):
+        translation = np.asarray(params[:dim], dtype=float)
+        angles = np.asarray(params[dim:], dtype=float)
+        transformed_xs = _apply_transform_static(
+            unit_xs, center_unit, translation, angles, angle_pairs
+        )
+        try:
+            outputs = np.asarray(compiled_function(transformed_xs), dtype=float).reshape(-1)
+        except Exception:
+            return None, np.inf
+        if outputs.shape[0] != unit_xs.shape[0]:
+            return None, np.inf
+        if np.any(~np.isfinite(outputs)) or np.ptp(outputs) <= 1e-12:
+            return None, np.inf
+        loss = np.mean((_zscore_row_static(outputs) - target_z) ** 2)
+        if not np.isfinite(loss):
+            return None, np.inf
+        return outputs, float(loss)
+
+    best_outputs, best_loss = evaluate_params(initial_params)
+    best_params = initial_params.copy()
+    if best_outputs is None and np.any(initial_params != 0.0):
+        best_outputs, best_loss = evaluate_params(zero_params)
+        best_params = zero_params.copy()
+    if best_outputs is None:
+        return None
+
+    if transform_maxfev > 1 and best_params.size > 0:
+        try:
+            result = minimize(
+                lambda params: evaluate_params(params)[1],
+                best_params,
+                method="Powell",
+                bounds=bounds,
+                options={"maxfev": transform_maxfev, "disp": False},
+            )
+            candidate_params = np.asarray(result.x, dtype=float) if result.x is not None else best_params
+            candidate_outputs, candidate_loss = evaluate_params(candidate_params)
+            if candidate_outputs is not None and candidate_loss < best_loss:
+                best_outputs = candidate_outputs
+                best_loss = candidate_loss
+                best_params = candidate_params
+        except Exception:
+            pass
+
+    return FittedFunctionModel(
+        function=function,
+        callable=compiled_function,
+        center=center_unit.copy(),
+        function_idx=int(function_idx),
+        translation=best_params[:dim].copy(),
+        angles=best_params[dim:].copy(),
+        angle_pairs=angle_pairs,
+        loss=best_loss,
+        outputs=best_outputs,
+    )
+
+
 @dataclass
 class FittedFunctionModel:
     function: object
     callable: object
     center: np.ndarray
+    function_idx: int | None
     translation: np.ndarray
     angles: np.ndarray
     angle_pairs: list[tuple[int, int]]
@@ -91,10 +209,11 @@ class doe_model:
         preserve_input_order=True,
         drop_duplicate_points=True,
         point_selection="local_diverse",
-        transform_maxfev=30,
+        transform_maxfev=15,
         translation_bound=0.2,
         use_transform_fitting=True,
         selector_mode="latent",
+        transform_fit_workers=None,
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
@@ -111,6 +230,7 @@ class doe_model:
             translation_bound (float, optional): Per-coordinate bound for the fitted translation in normalized coordinates.
             use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
             selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
+            transform_fit_workers (int | None, optional): Number of worker threads used to fit the function bank.
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -125,6 +245,8 @@ class doe_model:
         self.active_function_models = []
         self.distances = []
         self.transform_cache = {}
+        self.transform_fit_executor = None
+        self.transform_fit_executor_workers = None
         self.fun_save_path = f'doe_saves/functions.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
         seed(self.seed)
@@ -144,10 +266,41 @@ class doe_model:
         self.translation_bound = float(translation_bound)
         self.use_transform_fitting = bool(use_transform_fitting)
         self.selector_mode = str(selector_mode)
+        cpu_count = os.cpu_count() or 8
+        self.transform_fit_workers = max(
+            1,
+            int(transform_fit_workers)
+            if transform_fit_workers is not None
+            else min(8, cpu_count),
+        )
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
         if self.selector_mode not in {"latent", "fitted_loss"}:
             raise ValueError(f"Unsupported selector_mode: {self.selector_mode}")
+
+    def _get_transform_fit_executor(self):
+        if self.transform_fit_workers == 1:
+            self._shutdown_transform_fit_executor()
+            return None
+        if (
+            self.transform_fit_executor is None
+            or self.transform_fit_executor_workers != self.transform_fit_workers
+        ):
+            self._shutdown_transform_fit_executor()
+            self.transform_fit_executor = ThreadPoolExecutor(
+                max_workers=self.transform_fit_workers
+            )
+            self.transform_fit_executor_workers = self.transform_fit_workers
+        return self.transform_fit_executor
+
+    def _shutdown_transform_fit_executor(self):
+        if self.transform_fit_executor is not None:
+            self.transform_fit_executor.shutdown(wait=True)
+            self.transform_fit_executor = None
+            self.transform_fit_executor_workers = None
+
+    def __del__(self):
+        self._shutdown_transform_fit_executor()
 
 
     def __str__(self):
@@ -285,80 +438,6 @@ class doe_model:
         transformed = center_unit.reshape(1, -1) + translation.reshape(1, -1) + centered @ rotation.T
         return np.clip(transformed, 0.01, 0.99)
 
-    def _fit_function_transform(self, function_idx, function, compiled_function, unit_xs, target_values, center_unit):
-        if compiled_function is None:
-            return None
-
-        dim = unit_xs.shape[1]
-        angle_pairs = self._rotation_pairs(dim)
-        target_z = self._zscore_row(target_values)
-        bounds = [(-self.translation_bound, self.translation_bound)] * dim + [(-math.pi, math.pi)] * len(angle_pairs)
-        zero_params = np.zeros(dim + len(angle_pairs), dtype=float)
-        cache_key = int(function_idx)
-        cached_params = self.transform_cache.get(cache_key)
-        if cached_params is not None and len(cached_params) == len(zero_params):
-            initial_params = np.asarray(cached_params, dtype=float).copy()
-        else:
-            initial_params = zero_params.copy()
-
-        def evaluate_params(params):
-            translation = np.asarray(params[:dim], dtype=float)
-            angles = np.asarray(params[dim:], dtype=float)
-            transformed_xs = self._apply_transform(unit_xs, center_unit, translation, angles, angle_pairs)
-            try:
-                outputs = np.asarray(compiled_function(transformed_xs), dtype=float).reshape(-1)
-            except Exception:
-                return None, np.inf
-            if outputs.shape[0] != unit_xs.shape[0]:
-                return None, np.inf
-            if np.any(~np.isfinite(outputs)) or np.ptp(outputs) <= 1e-12:
-                return None, np.inf
-            loss = np.mean((self._zscore_row(outputs) - target_z) ** 2)
-            if not np.isfinite(loss):
-                return None, np.inf
-            return outputs, float(loss)
-
-        best_outputs, best_loss = evaluate_params(initial_params)
-        best_params = initial_params.copy()
-        if best_outputs is None and np.any(initial_params != 0.0):
-            best_outputs, best_loss = evaluate_params(zero_params)
-            best_params = zero_params.copy()
-        if best_outputs is None:
-            self.transform_cache.pop(cache_key, None)
-            return None
-
-        if self.transform_maxfev > 1 and best_params.size > 0:
-            try:
-                result = minimize(
-                    lambda params: evaluate_params(params)[1],
-                    best_params,
-                    method="Powell",
-                    bounds=bounds,
-                    options={"maxfev": self.transform_maxfev, "disp": False},
-                )
-                candidate_params = np.asarray(result.x, dtype=float) if result.x is not None else best_params
-                candidate_outputs, candidate_loss = evaluate_params(candidate_params)
-                if candidate_outputs is not None and candidate_loss < best_loss:
-                    best_outputs = candidate_outputs
-                    best_loss = candidate_loss
-                    best_params = candidate_params
-            except Exception:
-                pass
-
-        self.transform_cache[cache_key] = best_params.copy()
-        translation = best_params[:dim].copy()
-        angles = best_params[dim:].copy()
-        return FittedFunctionModel(
-            function=function,
-            callable=compiled_function,
-            center=center_unit.copy(),
-            translation=translation,
-            angles=angles,
-            angle_pairs=angle_pairs,
-            loss=best_loss,
-            outputs=best_outputs,
-        )
-
     def _fit_function_bank(self, unit_xs, target_values, center):
         if not self.use_transform_fitting:
             raw_rows = self.eval_functions(unit_xs)
@@ -369,26 +448,53 @@ class doe_model:
                     function=function,
                     callable=eval('lambda array_x:' + function),
                     center=center_unit.copy(),
+                    function_idx=function_idx,
                     translation=np.zeros(unit_xs.shape[1], dtype=float),
                     angles=np.zeros(len(angle_pairs), dtype=float),
                     angle_pairs=angle_pairs,
                 )
-                for function in self.active_functions
+                for function_idx, function in enumerate(self.active_functions)
             ]
             if raw_rows.size == 0:
                 return raw_rows
             return np.asarray([self._normalize_value_row(row) for row in raw_rows], dtype=float)
 
         center_unit = self._normalize_input_points(np.asarray(center).reshape(1, -1))[0]
+        fit_tasks = [
+            (
+                function_idx,
+                function,
+                compiled_function,
+                unit_xs,
+                target_values,
+                center_unit,
+                self.translation_bound,
+                self.transform_maxfev,
+                None
+                if self.transform_cache.get(function_idx) is None
+                else np.asarray(self.transform_cache[function_idx], dtype=float).copy(),
+            )
+            for function_idx, (function, compiled_function) in enumerate(
+                zip(np.asarray(self.functions), self.compiled_functions)
+            )
+        ]
+        if self.transform_fit_workers == 1:
+            fitted_candidates = map(_fit_function_transform_worker, fit_tasks)
+        else:
+            executor = self._get_transform_fit_executor()
+            fitted_candidates = list(executor.map(_fit_function_transform_worker, fit_tasks))
+
         fitted_rows = []
         active_functions = []
         active_models = []
-        for function_idx, (function, compiled_function) in enumerate(zip(np.asarray(self.functions), self.compiled_functions)):
-            fitted_model = self._fit_function_transform(function_idx, function, compiled_function, unit_xs, target_values, center_unit)
+        for fitted_model in fitted_candidates:
             if fitted_model is None:
                 continue
-            fitted_rows.append(self._normalize_value_row(fitted_model["outputs"]))
-            active_functions.append(function)
+            self.transform_cache[fitted_model.function_idx] = np.concatenate(
+                [fitted_model.translation, fitted_model.angles]
+            )
+            fitted_rows.append(self._normalize_value_row(fitted_model.outputs))
+            active_functions.append(fitted_model.function)
             active_models.append(fitted_model)
 
         self.active_functions = np.array(active_functions, dtype=object)
