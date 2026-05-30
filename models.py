@@ -64,13 +64,21 @@ def elm(h,x,y,model):
     hidden_size = int(h*inp_size)
     input_weights = tf.random.normal([inp_size,hidden_size])
     biases = tf.random.normal([hidden_size])
-    hidden = lambda a: tf.nn.relu(tf.tensordot(tf.cast(a,tf.float32),input_weights,1) + biases)
-    output_weights = tf.tensordot(tf.linalg.pinv(hidden(x)), tf.cast(y,tf.float32),1)
-
-    def predict(a):
-        return tf.tensordot(hidden(a),output_weights,1)
-
-    return predict
+    hidden_train = tf.nn.relu(tf.matmul(tf.cast(x, tf.float32), input_weights) + biases)
+    output_weights = tf.matmul(
+        tf.linalg.pinv(hidden_train),
+        tf.reshape(tf.cast(y, tf.float32), (-1, 1)),
+    )
+    inp = tf.keras.layers.Input(shape=(inp_size,))
+    hidden_layer = tf.keras.layers.Dense(hidden_size, activation="relu", trainable=False)
+    output_layer = tf.keras.layers.Dense(1, use_bias=False, trainable=False)
+    hidden = hidden_layer(inp)
+    outp = output_layer(hidden)
+    outp = tf.keras.layers.Lambda(lambda tensor: tf.squeeze(tensor, axis=-1))(outp)
+    model = tf.keras.Model(inputs=inp,outputs=outp)
+    hidden_layer.set_weights([input_weights.numpy(), biases.numpy()])
+    output_layer.set_weights([output_weights.numpy()])
+    return model
 
 def rbf_network(layers,gamma,x,y,model): 
     d = x.shape[-1]
@@ -83,6 +91,7 @@ def rbf_network(layers,gamma,x,y,model):
             # feed = tf.nn.relu(feed)
             # feed = tf.keras.layers.Dropout(0.2)(feed)
         outp = tf.keras.layers.Dense(1)(feed)
+        outp = tf.keras.layers.Lambda(lambda tensor: tf.squeeze(tensor, axis=-1))(outp)
         model = tf.keras.Model(inputs=inp,outputs=outp)
 
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),loss = 'mse')
@@ -96,9 +105,10 @@ def mlp(layers,x,y,model):
         inp = tf.keras.layers.Input(shape=(d,))
         feed = inp
         for n in map(int,layers):
-            feed = tf.keras.layers.Dense(n, activation='relu')(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
+            feed = tf.keras.layers.Dense(n, activation="relu")(feed)# + (int(feed.shape[-1] == n) * feed if feed.shape[-1] == n else 0)
             # feed = tf.keras.layers.Dropout(0.2)(feed)
         outp = tf.keras.layers.Dense(1)(feed)
+        outp = tf.keras.layers.Lambda(lambda tensor: tf.squeeze(tensor, axis=-1))(outp)
         model = tf.keras.Model(inputs=inp,outputs=outp)
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),loss = 'mse')
     model.fit(x,y,batch_size = int(x.shape[0]/10),epochs=5,verbose=0)
@@ -155,7 +165,6 @@ class Surrogate:
             if self.is_id: return np.zeros(x.shape[0])
             latent = self.dim_red(x)  # ty:ignore[call-non-callable]
             y = self.model(latent)  # ty:ignore[call-non-callable]
-            y = np.asarray(y).reshape(-1)
             y = np.nan_to_num(y, nan=4.9)
             return y
     
