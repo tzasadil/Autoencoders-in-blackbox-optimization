@@ -1,6 +1,7 @@
 import os.path
 import sys
 import warnings
+from dataclasses import dataclass
 from statistics import mode
 
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ import sklearn.preprocessing
 import tensorflow as tf
 from matplotlib import cm
 from numpy.random import seed
+from time import perf_counter
 from scipy.stats import qmc
 from sklearn import manifold
 import math
@@ -23,7 +25,7 @@ from doe2vec.modulesRandFunc import generate_tree2exp as genTree2exp
 from concurrent.futures import ProcessPoolExecutor
 
 from scipy.spatial import distance_matrix
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment, minimize
 
 def no_descs(ax):
         for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
@@ -66,30 +68,49 @@ def group_list(l, group_size):
     for i in range(0, len(l), group_size):
         yield l[i:i+group_size]
 
+
+@dataclass
+class FittedFunctionModel:
+    function: object
+    callable: object
+    center: np.ndarray
+    translation: np.ndarray
+    angles: np.ndarray
+    angle_pairs: list[tuple[int, int]]
+    loss: float = math.inf
+    outputs: np.ndarray | None = None
+
 class doe_model:
     def __init__(
         self,
         inp_size,
         latent_dim,
-        n_functions=250_000,
+        n_functions=1_000,
         seed_nr=0,
         kl_weight=0.001,
         preserve_input_order=True,
         drop_duplicate_points=True,
         point_selection="local_diverse",
+        transform_maxfev=30,
+        translation_bound=0.2,
+        use_transform_fitting=True,
+        selector_mode="latent",
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
         Args:
-            m (int): Power for number of samples used in the Sobol sampler (not used for custom_sample)
-            n (int, optional): Number of generated functions to use a training data. Defaults to 1000.
-            latent_dim (int, optional): Number of dimensions in the latent space (vector size). Defaults to 16.
-            seed_nr (int, optional): Random seed. Defaults to 0.
-            kl_weight (float, optional): Defaults to 0.1.
-            custom_sample (array, optional): dim-d Array with a custom sample or None to use Sobol sequences. Defaults to None.
-            use_mlflow (bool, optional): To use the mlflow backend to log experiments. Defaults to False.
-            mlflow_name (str, optional): The name to log the mlflow experiment. Defaults to "Doc2Vec".
-            model_type (str, optional): The model to use, either "AE" or "VAE". Defaults to "VAE".
+            inp_size (int): Base number of DOE points per problem dimension.
+            latent_dim (int): Latent width multiplier used by the VAE encoder/decoder.
+            n_functions (int, optional): Number of generated training functions to keep in the bank.
+            seed_nr (int, optional): Random seed used for generated functions and Sobol sampling.
+            kl_weight (float, optional): KL penalty weight used when training the VAE.
+            preserve_input_order (bool, optional): Reorder local DOE points to stay aligned with the previous round.
+            drop_duplicate_points (bool, optional): Remove repeated x locations before building the local DOE.
+            point_selection (str, optional): Local point selection strategy, either "local_diverse" or "local_nearest".
+            transform_maxfev (int, optional): Function-evaluation budget for the local transform fit of each bank function.
+            translation_bound (float, optional): Per-coordinate bound for the fitted translation in normalized coordinates.
+            use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
+            selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -99,8 +120,11 @@ class doe_model:
         self.loaded = False
         self.autoencoder = None
         self.functions = []
+        self.compiled_functions = []
         self.active_functions = []
+        self.active_function_models = []
         self.distances = []
+        self.transform_cache = {}
         self.fun_save_path = f'doe_saves/functions.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
         seed(self.seed)
@@ -116,8 +140,14 @@ class doe_model:
         self.preserve_input_order = bool(preserve_input_order)
         self.drop_duplicate_points = bool(drop_duplicate_points)
         self.point_selection = point_selection
+        self.transform_maxfev = int(transform_maxfev)
+        self.translation_bound = float(translation_bound)
+        self.use_transform_fitting = bool(use_transform_fitting)
+        self.selector_mode = str(selector_mode)
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
+        if self.selector_mode not in {"latent", "fitted_loss"}:
+            raise ValueError(f"Unsupported selector_mode: {self.selector_mode}")
 
 
     def __str__(self):
@@ -185,7 +215,9 @@ class doe_model:
         self.autoencoder = VAE(int(self.latent_dim*dim), self.inp_size, kl_weight=self.kl_weight)
         self.autoencoder.compile(optimizer="adam")
         self.active_functions = []
+        self.active_function_models = []
         self.distances = []
+        self.transform_cache = {}
         self.old_xs = None
 
 
@@ -199,9 +231,171 @@ class doe_model:
             else:
                 self.functions = self.generate_functions(self.gen_x_sample(10), self.functions)
                 np.save(f"{self.fun_save_path}", self.functions)
+        self.compiled_functions = self._compile_functions(self.functions)
 
         self.loaded = True
         return self
+
+    def _compile_functions(self, functions):
+        compiled = []
+        for function in np.asarray(functions):
+            try:
+                compiled.append(eval('lambda array_x:' + function))
+            except Exception:
+                compiled.append(None)
+        return np.array(compiled, dtype=object)
+
+    def _normalize_input_points(self, xs):
+        xs = np.asarray(xs, dtype=float)
+        return np.clip((xs + 5.0) / 10.0, 0.01, 0.99)
+
+    def _normalize_value_row(self, values):
+        values = np.asarray(values, dtype=float).reshape(-1)
+        mn = np.min(values)
+        mx = np.max(values)
+        normalized = (values - mn) / (mx - mn + 1e-4)
+        return np.clip(normalized, 0.01, 0.99)
+
+    def _zscore_row(self, values):
+        values = np.asarray(values, dtype=float).reshape(-1)
+        std = np.std(values)
+        if not np.isfinite(std) or std <= 1e-12:
+            return np.zeros_like(values)
+        return (values - np.mean(values)) / std
+
+    def _rotation_pairs(self, dim):
+        return [(left, right) for left in range(dim - 1) for right in range(left + 1, dim)]
+
+    def _rotation_matrix(self, dim, angles, angle_pairs):
+        rotation = np.eye(dim)
+        for angle, (left, right) in zip(angles, angle_pairs):
+            cosine = np.cos(angle)
+            sine = np.sin(angle)
+            givens = np.eye(dim)
+            givens[left, left] = cosine
+            givens[left, right] = -sine
+            givens[right, left] = sine
+            givens[right, right] = cosine
+            rotation = givens @ rotation
+        return rotation
+
+    def _apply_transform(self, unit_xs, center_unit, translation, angles, angle_pairs):
+        centered = unit_xs - center_unit.reshape(1, -1)
+        rotation = self._rotation_matrix(unit_xs.shape[1], angles, angle_pairs)
+        transformed = center_unit.reshape(1, -1) + translation.reshape(1, -1) + centered @ rotation.T
+        return np.clip(transformed, 0.01, 0.99)
+
+    def _fit_function_transform(self, function_idx, function, compiled_function, unit_xs, target_values, center_unit):
+        if compiled_function is None:
+            return None
+
+        dim = unit_xs.shape[1]
+        angle_pairs = self._rotation_pairs(dim)
+        target_z = self._zscore_row(target_values)
+        bounds = [(-self.translation_bound, self.translation_bound)] * dim + [(-math.pi, math.pi)] * len(angle_pairs)
+        zero_params = np.zeros(dim + len(angle_pairs), dtype=float)
+        cache_key = int(function_idx)
+        cached_params = self.transform_cache.get(cache_key)
+        if cached_params is not None and len(cached_params) == len(zero_params):
+            initial_params = np.asarray(cached_params, dtype=float).copy()
+        else:
+            initial_params = zero_params.copy()
+
+        def evaluate_params(params):
+            translation = np.asarray(params[:dim], dtype=float)
+            angles = np.asarray(params[dim:], dtype=float)
+            transformed_xs = self._apply_transform(unit_xs, center_unit, translation, angles, angle_pairs)
+            try:
+                outputs = np.asarray(compiled_function(transformed_xs), dtype=float).reshape(-1)
+            except Exception:
+                return None, np.inf
+            if outputs.shape[0] != unit_xs.shape[0]:
+                return None, np.inf
+            if np.any(~np.isfinite(outputs)) or np.ptp(outputs) <= 1e-12:
+                return None, np.inf
+            loss = np.mean((self._zscore_row(outputs) - target_z) ** 2)
+            if not np.isfinite(loss):
+                return None, np.inf
+            return outputs, float(loss)
+
+        best_outputs, best_loss = evaluate_params(initial_params)
+        best_params = initial_params.copy()
+        if best_outputs is None and np.any(initial_params != 0.0):
+            best_outputs, best_loss = evaluate_params(zero_params)
+            best_params = zero_params.copy()
+        if best_outputs is None:
+            self.transform_cache.pop(cache_key, None)
+            return None
+
+        if self.transform_maxfev > 1 and best_params.size > 0:
+            try:
+                result = minimize(
+                    lambda params: evaluate_params(params)[1],
+                    best_params,
+                    method="Powell",
+                    bounds=bounds,
+                    options={"maxfev": self.transform_maxfev, "disp": False},
+                )
+                candidate_params = np.asarray(result.x, dtype=float) if result.x is not None else best_params
+                candidate_outputs, candidate_loss = evaluate_params(candidate_params)
+                if candidate_outputs is not None and candidate_loss < best_loss:
+                    best_outputs = candidate_outputs
+                    best_loss = candidate_loss
+                    best_params = candidate_params
+            except Exception:
+                pass
+
+        self.transform_cache[cache_key] = best_params.copy()
+        translation = best_params[:dim].copy()
+        angles = best_params[dim:].copy()
+        return FittedFunctionModel(
+            function=function,
+            callable=compiled_function,
+            center=center_unit.copy(),
+            translation=translation,
+            angles=angles,
+            angle_pairs=angle_pairs,
+            loss=best_loss,
+            outputs=best_outputs,
+        )
+
+    def _fit_function_bank(self, unit_xs, target_values, center):
+        if not self.use_transform_fitting:
+            raw_rows = self.eval_functions(unit_xs)
+            center_unit = self._normalize_input_points(np.asarray(center).reshape(1, -1))[0]
+            angle_pairs = self._rotation_pairs(unit_xs.shape[1])
+            self.active_function_models = [
+                FittedFunctionModel(
+                    function=function,
+                    callable=eval('lambda array_x:' + function),
+                    center=center_unit.copy(),
+                    translation=np.zeros(unit_xs.shape[1], dtype=float),
+                    angles=np.zeros(len(angle_pairs), dtype=float),
+                    angle_pairs=angle_pairs,
+                )
+                for function in self.active_functions
+            ]
+            if raw_rows.size == 0:
+                return raw_rows
+            return np.asarray([self._normalize_value_row(row) for row in raw_rows], dtype=float)
+
+        center_unit = self._normalize_input_points(np.asarray(center).reshape(1, -1))[0]
+        fitted_rows = []
+        active_functions = []
+        active_models = []
+        for function_idx, (function, compiled_function) in enumerate(zip(np.asarray(self.functions), self.compiled_functions)):
+            fitted_model = self._fit_function_transform(function_idx, function, compiled_function, unit_xs, target_values, center_unit)
+            if fitted_model is None:
+                continue
+            fitted_rows.append(self._normalize_value_row(fitted_model["outputs"]))
+            active_functions.append(function)
+            active_models.append(fitted_model)
+
+        self.active_functions = np.array(active_functions, dtype=object)
+        self.active_function_models = active_models
+        if len(fitted_rows) == 0:
+            return np.empty((0, len(unit_xs)))
+        return np.asarray(fitted_rows, dtype=float)
 
     def generate_functions(self, array_x, provided_functions=[]):
         def fun_gen():
@@ -340,21 +534,17 @@ class doe_model:
 
 
 
-        xs = np.clip((closest_xs+5)/10,0.01, 0.99)
-        # mn = np.mean(closest_ys,axis=-1, keepdims=True)
-        # std = np.std(closest_ys,axis=-1, keepdims=True)
-        # closest_ys = (closest_ys - mn) / (np.where(std==0,1e-4,std))
-        mn = np.min(closest_ys)
-        mx = np.max(closest_ys)
-        closest_ys = (closest_ys - mn) / (mx-mn+(1e-4))
-        closest_ys = np.clip(closest_ys, 0.01, 0.99)
+        xs = self._normalize_input_points(closest_xs)
+        target_values = np.asarray(closest_ys, dtype=float).reshape(-1)
+        normalized_target_values = self._normalize_value_row(target_values)
 
         # Keep point-to-index correspondence stable only in the improved variant.
         if self.preserve_input_order and self.old_xs is not None:
             dist_matrix = distance_matrix(self.old_xs, xs)
             _row_ind, col_ind = linear_sum_assignment(dist_matrix)
             ordered_xs = xs[col_ind]
-            closest_ys = closest_ys[col_ind]
+            target_values = target_values[col_ind]
+            normalized_target_values = normalized_target_values[col_ind]
             self.old_xs = ordered_xs
             eval_xs = self.old_xs
         elif self.preserve_input_order:
@@ -363,18 +553,12 @@ class doe_model:
         else:
             self.old_xs = None
             eval_xs = xs
-        self.Y = self.eval_functions(eval_xs)
+        fit_bank_start = perf_counter()
+        self.Y = self._fit_function_bank(eval_xs, target_values, center)
+        fit_bank_elapsed = perf_counter() - fit_bank_start
+        print(f'fit function bank time {fit_bank_elapsed:.3f}s')
         if len(self.active_functions) < 2:
             raise ValueError("Too few valid DOE functions remained for the current training round")
-
-        # mn = np.min(y,axis=-1, keepdims=True)
-        # mx = np.max(y,axis=-1, keepdims=True)
-        # y = (y - mn) / ((mx - mn)+1e-4)
-        # y = np.clip(y, 1e-3, 0.999)
-        mn = np.min(self.Y,axis=-1, keepdims=True)
-        mx = np.max(self.Y,axis=-1, keepdims=True)
-        self.Y = (self.Y - mn) / (mx-mn+(1e-4))
-        self.Y = np.clip(self.Y, 0.01, 0.99)
 
 
         # end_time = timer()
@@ -382,7 +566,7 @@ class doe_model:
         # print(f"evaluate funcs time: {elapsed}")
 
         self.fit(epochs=self.train_epochs)
-        f,d = self.approximate(closest_ys, scale_inp=True)
+        f,d = self.approximate(normalized_target_values, scale_inp=True)
 
         # end_time_ = timer()
         # elapsed = end_time_ - end_time
@@ -394,41 +578,52 @@ class doe_model:
         return self.approximation(xs)
 
     def approximate(self, array_y, scale_inp=True):
-        # y evaluated from training funcs
-        training_latent = self.encode(self.Y)
-        # enc_min = np.min(training_latent,axis=0, keepdims=True)
-        # enc_max = np.max(training_latent,axis=0, keepdims=True)
-        # training_latent = (training_latent - enc_min) / ((enc_max - enc_min)+1e-4)
-        # mn = np.mean(training_latent,axis=0, keepdims=True)
-        # std = np.std(training_latent,axis=0, keepdims=True)
-        # std = np.where(std==0, 1e-4, std)
-        # training_latent = (training_latent - mn) / std # scale each column of the latent dim to make the nearestneighbor consider each node equally
+        if self.selector_mode == "fitted_loss":
+            losses = np.array([model.loss for model in self.active_function_models], dtype=float)
+            i = int(np.argmin(losses))
+            mindist = float(losses[i])
+            print('approx fitted loss', mindist)
+        else:
+            # y evaluated from training funcs
+            training_latent = self.encode(self.Y)
+            # enc_min = np.min(training_latent,axis=0, keepdims=True)
+            # enc_max = np.max(training_latent,axis=0, keepdims=True)
+            # training_latent = (training_latent - enc_min) / ((enc_max - enc_min)+1e-4)
+            # mn = np.mean(training_latent,axis=0, keepdims=True)
+            # std = np.std(training_latent,axis=0, keepdims=True)
+            # std = np.where(std==0, 1e-4, std)
+            # training_latent = (training_latent - mn) / std # scale each column of the latent dim to make the nearestneighbor consider each node equally
 
-        # y from the evo algorithm
-        assert(len(array_y.shape)==1)
-        latent = self.encode(array_y)
-        if len(latent.shape)==1:
-            latent = latent.reshape(1, -1)
-        # latent = (latent - enc_min) / ((enc_max - enc_min)+1e-4)
-        # latent = (latent - mn) / std
+            # y from the evo algorithm
+            assert(len(array_y.shape)==1)
+            latent = self.encode(array_y)
+            if len(latent.shape)==1:
+                latent = latent.reshape(1, -1)
+            # latent = (latent - enc_min) / ((enc_max - enc_min)+1e-4)
+            # latent = (latent - mn) / std
 
 
-        # find closest function to use as an approximation
-        eu_dists = np.linalg.norm(training_latent-latent, axis=1)
-        i = np.argmin(eu_dists)
-        mindist= eu_dists[i]
-        print('approx distance', mindist)
-        best_approx_str = self.active_functions[i]
-        best_approx_f = eval('lambda array_x:'+best_approx_str)
+            # find closest function to use as an approximation
+            eu_dists = np.linalg.norm(training_latent-latent, axis=1)
+            i = np.argmin(eu_dists)
+            mindist= eu_dists[i]
+            print('approx distance', mindist)
+        best_approx = self.active_function_models[i]
 
 
         def run_approx(array_x):
             if (added_dim := len(array_x.shape)==1):
                 array_x = array_x[np.newaxis,:]
             if scale_inp:
-                array_x = (array_x + 5.0)/10 #scale from bbob vals to 0-1
-                array_x = np.clip(array_x, 0.01, 0.99)
-            e = best_approx_f(array_x)
+                array_x = self._normalize_input_points(array_x)
+            transformed_xs = self._apply_transform(
+                array_x,
+                best_approx.center,
+                best_approx.translation,
+                best_approx.angles,
+                best_approx.angle_pairs,
+            )
+            e = best_approx.callable(transformed_xs)
             return e[0] if added_dim else e
         return run_approx, mindist
 

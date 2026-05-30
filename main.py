@@ -154,6 +154,19 @@ def build_plain_doe_model(n_samples, latent_dim, label=None):
     )
 
 
+def build_fitloss_model(n_samples, latent_dim, label=None):
+    return build_doe_model(
+        n_samples,
+        latent_dim,
+        label=label or "fitloss",
+        selector_mode="fitted_loss",
+    )
+
+
+def build_fitloss_doe_model(n_samples, latent_dim, label=None):
+    return build_fitloss_model(n_samples, latent_dim, label=label)
+
+
 def build_vae_model(latent_layers, train_records, label=None):
     latent_desc = "x".join(format_ratio(layer) for layer in latent_layers)
     model_name = label or f"vae_latent_{latent_desc}_inputs_{train_records}"
@@ -193,6 +206,7 @@ def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE
         [None, 2, None, elm(100)],
         [None, 2, None, build_plain_doe_model(2,8)],
         [None, 2, None, build_doe_model(2,8)],
+        [None, 2, None, build_fitloss_model(2,8)],
         [None, 1, None, None],
         [None, 2, None, gp],
         [None, 2, None, nearest(3)],

@@ -21,7 +21,7 @@ from control_analysis.transforms import add_func_group, default_groupby, improve
 
 _WORKER_BUNDLE: ControlDataBundle | None = None
 PRIMARY_DOE_MODEL = "doe_2_8"
-COMPARISON_MODELS = ["none", "gp", "nn3", "doe_plain_2_8", PRIMARY_DOE_MODEL]
+COMPARISON_MODELS = ["none", "gp", "nn3", "doe_plain_2_8", PRIMARY_DOE_MODEL, "fitloss"]
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
 
 
