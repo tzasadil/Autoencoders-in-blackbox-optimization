@@ -40,6 +40,7 @@ doe2vec/reco.py
 doe2vec/vae.py
 doe2vec/modulesRandFunc/NODE.py
 doe2vec/modulesRandFunc/__init__.py
+doe2vec/modulesRandFunc/function_bank.py
 doe2vec/modulesRandFunc/generate_exp2fun.py
 doe2vec/modulesRandFunc/generate_exp2fun_.py
 doe2vec/modulesRandFunc/generate_tree.py

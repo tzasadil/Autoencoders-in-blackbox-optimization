@@ -7,13 +7,15 @@ name = "diplomka"
 version = "0.1.0"
 description = ""
 readme = "README.md"
-# TensorFlow 2.20+ requires NumPy 2.1+ on Python 3.13+; cocopp 2.6.3 needs NumPy 1.x (`np.Inf`).
-requires-python = ">=3.9,<3.13"
+# JAX 0.4.38 requires Python 3.10+; TensorFlow 2.20+ requires NumPy 2.1+ on Python 3.13+,
+# while cocopp 2.6.3 still needs NumPy 1.x (`np.Inf`).
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "cma==3.4.0",
     "cmaes==0.10.0",
     "coco-experiment==2.6.99rc2",
     "cocopp==2.6.3",
+    "jax[cpu]==0.4.38",
     "numpy<2",
     "ruff>=0.14.10",
     "tensorflow>=2.20.0",

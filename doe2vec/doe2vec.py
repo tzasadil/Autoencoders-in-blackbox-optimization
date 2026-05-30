@@ -19,7 +19,11 @@ from sklearn import manifold
 import math
 # from doe2vec import bbobbenchmarks as bbob
 from doe2vec.vae import VAE
-from doe2vec.modulesRandFunc import generate_exp2fun as genExp2fun
+from doe2vec.modulesRandFunc.function_bank import (
+    compile_function_spec,
+    generate_function_spec,
+    precompile_function_spec,
+)
 from doe2vec.modulesRandFunc import generate_tree as genTree
 from doe2vec.modulesRandFunc import generate_tree2exp as genTree2exp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -32,41 +36,6 @@ def no_descs(ax):
             axis.set_ticklabels([])
             for line in axis.get_ticklines():
                 line.set_visible(False)
-def eval_multiple(fs, array_x):
-    fs = [a+' ' for a in fs]
-    y = []
-    orig_settings = np.seterr(all='raise')
-    for f in fs:
-        try:
-            y.append(eval(f))
-        except:
-            y.append(None)
-    np.seterr(**orig_settings)
-    return y
-# def evaluator(conn):
-#     import numpy as np
-#     fs = conn.recv()
-#     fs = [eval('lambda array_x:'+f) for f in fs]
-#     orig_settings = np.seterr(all='raise')
-#     while True:
-#         y = []
-#         array_x = np.array(conn.recv())
-#         for f in fs:
-#             try:
-#                 y.append(f(array_x))
-#             except:
-#                 y.append(None)
-#         conn.send(y)
-#     np.seterr(**orig_settings)
-#     return y
-def group_list(l, group_size):
-    """
-    :param l:           list
-    :param group_size:  size of each group
-    :return:            Yields successive group-sized lists from l.
-    """
-    for i in range(0, len(l), group_size):
-        yield l[i:i+group_size]
 
 
 def _zscore_row_static(values):
@@ -214,6 +183,7 @@ class doe_model:
         use_transform_fitting=True,
         selector_mode="latent",
         transform_fit_workers=None,
+        precompile_bank_functions=True,
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
@@ -231,6 +201,9 @@ class doe_model:
             use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
             selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
             transform_fit_workers (int | None, optional): Number of worker threads used to fit the function bank.
+                Defaults to 1 because the JAX CPU backend already parallelizes internally.
+            precompile_bank_functions (bool, optional): Whether to JIT-compile each loaded bank function
+                for the current DOE input shape before the optimization loop starts.
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -242,12 +215,13 @@ class doe_model:
         self.functions = []
         self.compiled_functions = []
         self.active_functions = []
+        self.active_compiled_functions = []
         self.active_function_models = []
         self.distances = []
         self.transform_cache = {}
         self.transform_fit_executor = None
         self.transform_fit_executor_workers = None
-        self.fun_save_path = f'doe_saves/functions.npy'
+        self.fun_save_path = f'doe_saves/functions_jax.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
         seed(self.seed)
         self.executor:ProcessPoolExecutor =  None
@@ -266,12 +240,12 @@ class doe_model:
         self.translation_bound = float(translation_bound)
         self.use_transform_fitting = bool(use_transform_fitting)
         self.selector_mode = str(selector_mode)
-        cpu_count = os.cpu_count() or 8
+        self.precompile_bank_functions = bool(precompile_bank_functions)
         self.transform_fit_workers = max(
             1,
             int(transform_fit_workers)
             if transform_fit_workers is not None
-            else min(8, cpu_count),
+            else 1,
         )
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
@@ -368,6 +342,7 @@ class doe_model:
         self.autoencoder = VAE(int(self.latent_dim*dim), self.inp_size, kl_weight=self.kl_weight)
         self.autoencoder.compile(optimizer="adam")
         self.active_functions = []
+        self.active_compiled_functions = []
         self.active_function_models = []
         self.distances = []
         self.transform_cache = {}
@@ -380,20 +355,26 @@ class doe_model:
 
         if (self.functions is None or len(self.functions) == 0):
             if os.path.exists(self.fun_save_path):
-                self.functions = np.load(self.fun_save_path)[:self.n_functions]
+                self.functions = np.load(self.fun_save_path, allow_pickle=True)[:self.n_functions]
             else:
                 self.functions = self.generate_functions(self.gen_x_sample(10), self.functions)
-                np.save(f"{self.fun_save_path}", self.functions)
-        self.compiled_functions = self._compile_functions(self.functions)
+                np.save(f"{self.fun_save_path}", np.asarray(self.functions, dtype=object))
+        self.compiled_functions = self._compile_functions(
+            self.functions,
+            input_shape=(self.inp_size, dim),
+        )
 
         self.loaded = True
         return self
 
-    def _compile_functions(self, functions):
+    def _compile_functions(self, functions, input_shape=None):
         compiled = []
         for function in np.asarray(functions):
             try:
-                compiled.append(eval('lambda array_x:' + function))
+                if self.precompile_bank_functions and input_shape is not None:
+                    compiled.append(precompile_function_spec(function, input_shape))
+                else:
+                    compiled.append(compile_function_spec(function))
             except Exception:
                 compiled.append(None)
         return np.array(compiled, dtype=object)
@@ -446,14 +427,16 @@ class doe_model:
             self.active_function_models = [
                 FittedFunctionModel(
                     function=function,
-                    callable=eval('lambda array_x:' + function),
+                    callable=compiled_function,
                     center=center_unit.copy(),
                     function_idx=function_idx,
                     translation=np.zeros(unit_xs.shape[1], dtype=float),
                     angles=np.zeros(len(angle_pairs), dtype=float),
                     angle_pairs=angle_pairs,
                 )
-                for function_idx, function in enumerate(self.active_functions)
+                for function_idx, (function, compiled_function) in enumerate(
+                    zip(self.active_functions, self.active_compiled_functions)
+                )
             ]
             if raw_rows.size == 0:
                 return raw_rows
@@ -486,6 +469,7 @@ class doe_model:
 
         fitted_rows = []
         active_functions = []
+        active_compiled_functions = []
         active_models = []
         for fitted_model in fitted_candidates:
             if fitted_model is None:
@@ -495,37 +479,37 @@ class doe_model:
             )
             fitted_rows.append(self._normalize_value_row(fitted_model.outputs))
             active_functions.append(fitted_model.function)
+            active_compiled_functions.append(fitted_model.callable)
             active_models.append(fitted_model)
 
         self.active_functions = np.array(active_functions, dtype=object)
+        self.active_compiled_functions = np.array(active_compiled_functions, dtype=object)
         self.active_function_models = active_models
         if len(fitted_rows) == 0:
             return np.empty((0, len(unit_xs)))
         return np.asarray(fitted_rows, dtype=float)
 
-    def generate_functions(self, array_x, provided_functions=[]):
+    def generate_functions(self, array_x, provided_functions=None):
         def fun_gen():
             if provided_functions is not None:
-                for f in provided_functions:
-                    yield f
+                for function_spec in provided_functions:
+                    yield function_spec
             while True:
                 tree = genTree.generate_tree(6, 16)
                 exp = genTree2exp.generate_tree2exp(tree)
-                fun = genExp2fun.generate_exp2fun(exp)
-                fun = '('+fun + ')[:,0]'
-                yield fun
+                yield generate_function_spec(exp)
 
         functions = []
-        orig_settings = np.seterr(all='raise')
         if not sys.warnoptions:
             warnings.simplefilter("ignore")
         iters = 0
-        for fun in fun_gen():
+        for function_spec in fun_gen():
             iters_per_succ = iters/max(len(functions),1)
             if len(functions) >= self.n_functions: break
             iters += 1
             try:
-                array_y = eval(fun)
+                compiled_function = compile_function_spec(function_spec)
+                array_y = np.asarray(compiled_function(array_x), dtype=float)
                 if (
                     np.isnan(array_y).any()
                     or np.isinf(array_y).any()
@@ -535,17 +519,16 @@ class doe_model:
                     or len(np.unique(array_y)) < len(array_y)/1.5):
                         continue
                 if (np.var(array_y) < 1.0):
-                    if (np.var(array_y*10) < 1.0):
+                    scaled_spec = ("unary", 23, function_spec)
+                    scaled_y = np.asarray(compile_function_spec(scaled_spec)(array_x), dtype=float)
+                    if (np.var(scaled_y) < 1.0):
                         continue
-                    else:
-                        fun = '10*('+fun+')'
-                functions.append(fun)
+                    function_spec = scaled_spec
+                functions.append(function_spec)
             except Exception as inst:
                 continue
         warnings.simplefilter("default")
-        np.seterr(**orig_settings)
-        # assert(len(provided_functions) == 0 or iters==self.n)
-        return np.array(functions)
+        return np.array(functions, dtype=object)
 
     def gen_x_sample(self, dim):
         import math
@@ -564,27 +547,32 @@ class doe_model:
         functions = np.asarray(self.functions)
         if len(functions) == 0:
             self.active_functions = np.array([], dtype=object)
+            self.active_compiled_functions = np.array([], dtype=object)
             return np.empty((0, len(array_x)))
 
-        windows = list(group_list(functions, math.ceil(len(functions)/8)))
+        rows = []
+        active_functions = []
+        active_compiled_functions = []
+        for function, compiled_function in zip(functions, self.compiled_functions):
+            if compiled_function is None:
+                continue
+            try:
+                values = np.asarray(compiled_function(array_x), dtype=float)
+            except Exception:
+                continue
+            if values.ndim != 1 or values.shape[0] != len(array_x):
+                continue
+            if np.any(~np.isfinite(values)) or np.ptp(values) <= 1e-12:
+                continue
+            rows.append(values)
+            active_functions.append(function)
+            active_compiled_functions.append(compiled_function)
 
-
-        y = self.executor.map(eval_multiple, windows, [array_x]*len(windows))
-        y = [arr for arrs in list(y) for arr in arrs]  #flatten
-        mask = np.array([a is not None for a in y], dtype=bool)
-        y = np.array([a for a in y if a is not None])
-        active_functions = functions[mask]
-
-        valid_mask = np.sum(np.logical_or(np.isnan(y),np.isinf(y)), axis=-1)==0
-        if y.size > 0:
-            valid_mask = np.logical_and(valid_mask, np.ptp(y, axis=-1) > 1e-12)
-        svm = np.sum(valid_mask)
-        if svm/len(valid_mask) < 0.9:
-            print()
-
-        self.active_functions = active_functions[valid_mask]
-        y = y[valid_mask,:]
-        return y
+        self.active_functions = np.array(active_functions, dtype=object)
+        self.active_compiled_functions = np.array(active_compiled_functions, dtype=object)
+        if len(rows) == 0:
+            return np.empty((0, len(array_x)))
+        return np.asarray(rows, dtype=float)
 
     def fit(self, epochs=5,batch_size=128, val_n = 50, **kwargs):
         """Fit the autoencoder model.

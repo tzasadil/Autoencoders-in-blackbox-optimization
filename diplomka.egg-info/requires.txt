@@ -2,6 +2,7 @@ cma==3.4.0
 cmaes==0.10.0
 coco-experiment==2.6.99rc2
 cocopp==2.6.3
+jax[cpu]==0.4.38
 numpy<2
 ruff>=0.14.10
 tensorflow>=2.20.0
