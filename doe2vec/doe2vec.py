@@ -26,7 +26,7 @@ from doe2vec.modulesRandFunc.function_bank import (
 )
 from doe2vec.modulesRandFunc import generate_tree as genTree
 from doe2vec.modulesRandFunc import generate_tree2exp as genTree2exp
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 from scipy.spatial import distance_matrix
 from scipy.optimize import linear_sum_assignment, minimize
@@ -182,8 +182,9 @@ class doe_model:
         translation_bound=0.2,
         use_transform_fitting=True,
         selector_mode="latent",
-        transform_fit_workers=None,
         precompile_bank_functions=True,
+        full_bank_refresh_interval=10,
+        partial_bank_top_k=None,
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
@@ -200,10 +201,12 @@ class doe_model:
             translation_bound (float, optional): Per-coordinate bound for the fitted translation in normalized coordinates.
             use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
             selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
-            transform_fit_workers (int | None, optional): Number of worker threads used to fit the function bank.
-                Defaults to 1 because the JAX CPU backend already parallelizes internally.
             precompile_bank_functions (bool, optional): Whether to JIT-compile each loaded bank function
                 for the current DOE input shape before the optimization loop starts.
+            full_bank_refresh_interval (int, optional): Refit the full bank every N DOE iterations.
+                Between refreshes, only the best-ranked subset from the previous iteration is refit.
+            partial_bank_top_k (int | None, optional): Number of bank functions to refit between full refreshes.
+                Defaults to max(32, 10% of the bank), capped by the bank size.
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -219,8 +222,10 @@ class doe_model:
         self.active_function_models = []
         self.distances = []
         self.transform_cache = {}
-        self.transform_fit_executor = None
-        self.transform_fit_executor_workers = None
+        self.bank_iteration = 0
+        self.bank_ranked_function_indices = np.array([], dtype=int)
+        self.last_bank_fit_was_full = True
+        self.last_bank_fit_candidate_count = 0
         self.fun_save_path = f'doe_saves/functions_jax.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
         seed(self.seed)
@@ -241,40 +246,14 @@ class doe_model:
         self.use_transform_fitting = bool(use_transform_fitting)
         self.selector_mode = str(selector_mode)
         self.precompile_bank_functions = bool(precompile_bank_functions)
-        self.transform_fit_workers = max(
-            1,
-            int(transform_fit_workers)
-            if transform_fit_workers is not None
-            else 1,
+        self.full_bank_refresh_interval = max(1, int(full_bank_refresh_interval))
+        self.partial_bank_top_k = (
+            None if partial_bank_top_k is None else max(1, int(partial_bank_top_k))
         )
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
         if self.selector_mode not in {"latent", "fitted_loss"}:
             raise ValueError(f"Unsupported selector_mode: {self.selector_mode}")
-
-    def _get_transform_fit_executor(self):
-        if self.transform_fit_workers == 1:
-            self._shutdown_transform_fit_executor()
-            return None
-        if (
-            self.transform_fit_executor is None
-            or self.transform_fit_executor_workers != self.transform_fit_workers
-        ):
-            self._shutdown_transform_fit_executor()
-            self.transform_fit_executor = ThreadPoolExecutor(
-                max_workers=self.transform_fit_workers
-            )
-            self.transform_fit_executor_workers = self.transform_fit_workers
-        return self.transform_fit_executor
-
-    def _shutdown_transform_fit_executor(self):
-        if self.transform_fit_executor is not None:
-            self.transform_fit_executor.shutdown(wait=True)
-            self.transform_fit_executor = None
-            self.transform_fit_executor_workers = None
-
-    def __del__(self):
-        self._shutdown_transform_fit_executor()
 
 
     def __str__(self):
@@ -346,6 +325,10 @@ class doe_model:
         self.active_function_models = []
         self.distances = []
         self.transform_cache = {}
+        self.bank_iteration = 0
+        self.bank_ranked_function_indices = np.array([], dtype=int)
+        self.last_bank_fit_was_full = True
+        self.last_bank_fit_candidate_count = 0
         self.old_xs = None
 
 
@@ -419,7 +402,37 @@ class doe_model:
         transformed = center_unit.reshape(1, -1) + translation.reshape(1, -1) + centered @ rotation.T
         return np.clip(transformed, 0.01, 0.99)
 
-    def _fit_function_bank(self, unit_xs, target_values, center):
+    def _resolve_partial_bank_top_k(self, total_functions):
+        if total_functions <= 0:
+            return 0
+        if self.partial_bank_top_k is not None:
+            return min(total_functions, self.partial_bank_top_k)
+        return min(total_functions, max(32, int(math.ceil(total_functions * 0.1))))
+
+    def _select_bank_candidate_indices(self):
+        total_functions = len(self.functions)
+        if total_functions == 0:
+            return np.array([], dtype=int), True
+        if self.bank_iteration == 0:
+            return np.arange(total_functions, dtype=int), True
+        if self.full_bank_refresh_interval <= 1:
+            return np.arange(total_functions, dtype=int), True
+        if self.bank_iteration % self.full_bank_refresh_interval == 0:
+            return np.arange(total_functions, dtype=int), True
+        if len(self.bank_ranked_function_indices) < 2:
+            return np.arange(total_functions, dtype=int), True
+
+        top_k = self._resolve_partial_bank_top_k(total_functions)
+        candidate_indices = np.asarray(self.bank_ranked_function_indices[:top_k], dtype=int)
+        candidate_indices = candidate_indices[
+            np.logical_and(candidate_indices >= 0, candidate_indices < total_functions)
+        ]
+        candidate_indices = np.unique(candidate_indices)
+        if len(candidate_indices) < 2:
+            return np.arange(total_functions, dtype=int), True
+        return candidate_indices, False
+
+    def _fit_function_bank(self, unit_xs, target_values, center, candidate_indices=None):
         if not self.use_transform_fitting:
             raw_rows = self.eval_functions(unit_xs)
             center_unit = self._normalize_input_points(np.asarray(center).reshape(1, -1))[0]
@@ -443,11 +456,15 @@ class doe_model:
             return np.asarray([self._normalize_value_row(row) for row in raw_rows], dtype=float)
 
         center_unit = self._normalize_input_points(np.asarray(center).reshape(1, -1))[0]
+        if candidate_indices is None:
+            candidate_indices = np.arange(len(self.functions), dtype=int)
+        else:
+            candidate_indices = np.asarray(candidate_indices, dtype=int)
         fit_tasks = [
             (
                 function_idx,
-                function,
-                compiled_function,
+                self.functions[function_idx],
+                self.compiled_functions[function_idx],
                 unit_xs,
                 target_values,
                 center_unit,
@@ -457,15 +474,9 @@ class doe_model:
                 if self.transform_cache.get(function_idx) is None
                 else np.asarray(self.transform_cache[function_idx], dtype=float).copy(),
             )
-            for function_idx, (function, compiled_function) in enumerate(
-                zip(np.asarray(self.functions), self.compiled_functions)
-            )
+            for function_idx in candidate_indices
         ]
-        if self.transform_fit_workers == 1:
-            fitted_candidates = map(_fit_function_transform_worker, fit_tasks)
-        else:
-            executor = self._get_transform_fit_executor()
-            fitted_candidates = list(executor.map(_fit_function_transform_worker, fit_tasks))
+        fitted_candidates = map(_fit_function_transform_worker, fit_tasks)
 
         fitted_rows = []
         active_functions = []
@@ -620,6 +631,7 @@ class doe_model:
         # closest_xs = np.array(train_x)[-self.inp_size:]
         # closest_ys = np.array(train_y)[-self.inp_size:]
 
+        iteration_start = perf_counter()
         train_x,train_y = np.array(train_x),np.array(train_y)
         if self.drop_duplicate_points:
             train_x, train_y = self._drop_duplicate_points(train_x, train_y)
@@ -648,9 +660,21 @@ class doe_model:
             self.old_xs = None
             eval_xs = xs
         fit_bank_start = perf_counter()
-        self.Y = self._fit_function_bank(eval_xs, target_values, center)
+        candidate_indices, fit_full_bank = self._select_bank_candidate_indices()
+        self.last_bank_fit_was_full = fit_full_bank
+        self.last_bank_fit_candidate_count = len(candidate_indices)
+        self.Y = self._fit_function_bank(
+            eval_xs,
+            target_values,
+            center,
+            candidate_indices=candidate_indices,
+        )
         fit_bank_elapsed = perf_counter() - fit_bank_start
-        print(f'fit function bank time {fit_bank_elapsed:.3f}s')
+        fit_scope = "full" if fit_full_bank else "partial"
+        print(
+            f'fit function bank time {fit_bank_elapsed:.3f}s '
+            f'({fit_scope}, candidates={self.last_bank_fit_candidate_count})'
+        )
         if len(self.active_functions) < 2:
             raise ValueError("Too few valid DOE functions remained for the current training round")
 
@@ -659,14 +683,33 @@ class doe_model:
         # elapsed = end_time - start_time
         # print(f"evaluate funcs time: {elapsed}")
 
+        autoencoder_fit_start = perf_counter()
         self.fit(epochs=self.train_epochs)
+        autoencoder_fit_elapsed = perf_counter() - autoencoder_fit_start
+        approx_start = perf_counter()
         f,d = self.approximate(normalized_target_values, scale_inp=True)
+        approx_elapsed = perf_counter() - approx_start
+        iteration_elapsed = perf_counter() - iteration_start
+        post_bank_elapsed = iteration_elapsed - fit_bank_elapsed
+        overlapped_iteration_floor = max(fit_bank_elapsed, post_bank_elapsed)
+        async_savings_ceiling = iteration_elapsed - overlapped_iteration_floor
+        print(
+            "doe iteration time "
+            f"total={iteration_elapsed:.3f}s "
+            f"bank={fit_bank_elapsed:.3f}s "
+            f"ae_fit={autoencoder_fit_elapsed:.3f}s "
+            f"approx={approx_elapsed:.3f}s "
+            f"post_bank={post_bank_elapsed:.3f}s "
+            f"async_floor={overlapped_iteration_floor:.3f}s "
+            f"async_max_savings={async_savings_ceiling:.3f}s"
+        )
 
         # end_time_ = timer()
         # elapsed = end_time_ - end_time
         # print(f"train time: {elapsed}")
         self.approximation = f
         self.distances.append(d)
+        self.bank_iteration += 1
 
     def __call__(self, xs):
         return self.approximation(xs)
@@ -674,6 +717,7 @@ class doe_model:
     def approximate(self, array_y, scale_inp=True):
         if self.selector_mode == "fitted_loss":
             losses = np.array([model.loss for model in self.active_function_models], dtype=float)
+            ranking = np.argsort(losses)
             i = int(np.argmin(losses))
             mindist = float(losses[i])
             print('approx fitted loss', mindist)
@@ -699,9 +743,14 @@ class doe_model:
 
             # find closest function to use as an approximation
             eu_dists = np.linalg.norm(training_latent-latent, axis=1)
+            ranking = np.argsort(eu_dists)
             i = np.argmin(eu_dists)
             mindist= eu_dists[i]
             print('approx distance', mindist)
+        self.bank_ranked_function_indices = np.asarray(
+            [self.active_function_models[idx].function_idx for idx in ranking],
+            dtype=int,
+        )
         best_approx = self.active_function_models[i]
 
 

@@ -73,7 +73,8 @@ if not os.path.exists("./exdata"):
 #
 budget = int(250)  # times dim
 rrr = cocopp.testbedsettings.current_testbed
-DEFAULT_PROBLEM_INFO = "function_indices:1-24 dimensions:2,5,10 instance_indices:1-10"
+# DEFAULT_PROBLEM_INFO = "function_indices:1-24 dimensions:2,5,10 instance_indices:1-10"
+DEFAULT_PROBLEM_INFO = "function_indices:1-24 dimensions:5 instance_indices:1"
 DEFAULT_BEST_VAE_CONFIG_PATH = os.path.join("data", "vae_sweep", "best_vae_config.json")
 DEFAULT_BEST_DOE_CONFIG_PATH = os.path.join("data", "doe_sweep", "best_doe_config.json")
 
@@ -203,11 +204,11 @@ def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE
     elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
 
     configs = [
+        [None, 1, None, None],
+        [None, 2, None, build_doe_model(2,8)],
         [None, 2, None, elm(100)],
         [None, 2, None, build_plain_doe_model(2,8)],
-        [None, 2, None, build_doe_model(2,8)],
         [None, 2, None, build_fitloss_model(2,8)],
-        [None, 1, None, None],
         [None, 2, None, gp],
         [None, 2, None, nearest(3)],
     ]
