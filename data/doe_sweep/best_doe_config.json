@@ -1,0 +1,7 @@
+{
+  "model": "doe_2_16",
+  "label": "best_doe",
+  "n_samples": 2,
+  "latent_dim": 16,
+  "selection_metric": "average_rank"
+}
