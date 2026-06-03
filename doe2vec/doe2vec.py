@@ -185,6 +185,7 @@ class doe_model:
         precompile_bank_functions=True,
         full_bank_refresh_interval=10,
         partial_bank_top_k=None,
+        autoencoder_batch_divisor=20,
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
 
@@ -207,6 +208,7 @@ class doe_model:
                 Between refreshes, only the best-ranked subset from the previous iteration is refit.
             partial_bank_top_k (int | None, optional): Number of bank functions to refit between full refreshes.
                 Defaults to max(32, 10% of the bank), capped by the bank size.
+            autoencoder_batch_divisor (int, optional): Scales the VAE batch size as corpus_size / divisor.
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -215,6 +217,7 @@ class doe_model:
         self.seed = seed_nr
         self.loaded = False
         self.autoencoder = None
+        self.Y = np.empty((0, 0), dtype=float)
         self.functions = []
         self.compiled_functions = []
         self.active_functions = []
@@ -250,6 +253,7 @@ class doe_model:
         self.partial_bank_top_k = (
             None if partial_bank_top_k is None else max(1, int(partial_bank_top_k))
         )
+        self.autoencoder_batch_divisor = max(1, int(autoencoder_batch_divisor))
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
         if self.selector_mode not in {"latent", "fitted_loss"}:
@@ -320,6 +324,7 @@ class doe_model:
         # self.autoencoder.load_weights(f'{self.model_save_path}.h5')
         self.autoencoder = VAE(int(self.latent_dim*dim), self.inp_size, kl_weight=self.kl_weight)
         self.autoencoder.compile(optimizer="adam")
+        self.Y = np.empty((0, self.inp_size), dtype=float)
         self.active_functions = []
         self.active_compiled_functions = []
         self.active_function_models = []
@@ -585,7 +590,7 @@ class doe_model:
             return np.empty((0, len(array_x)))
         return np.asarray(rows, dtype=float)
 
-    def fit(self, epochs=5,batch_size=128, val_n = 50, **kwargs):
+    def fit(self, epochs=5, batch_size=None, val_n=50, **kwargs):
         """Fit the autoencoder model.
 
         Args:
@@ -601,6 +606,14 @@ class doe_model:
 
         val_n = min(val_n, sample_count - 1)
         train_data = tf.cast(self.Y[:-val_n], tf.float32) if val_n > 0 else tf.cast(self.Y, tf.float32)
+        train_count = int(train_data.shape[0])
+        resolved_batch_size = batch_size
+        if resolved_batch_size is None:
+            resolved_batch_size = max(
+                1,
+                int(math.ceil(max(train_count, 1) / self.autoencoder_batch_divisor)),
+            )
+        resolved_batch_size = min(train_count, int(resolved_batch_size)) if train_count > 0 else 1
         validation_data = None
         if val_n > 0:
             validation = tf.cast(self.Y[-val_n:], tf.float32)
@@ -611,13 +624,13 @@ class doe_model:
         # self.functions = self.functions[valid_mask]
 
         self.autoencoder.fit(
-                train_data,
-                epochs=epochs,
-                batch_size=batch_size,
-                shuffle=True,
-                validation_data=validation_data,
-                **kwargs
-            )
+            train_data,
+            epochs=epochs,
+            batch_size=resolved_batch_size,
+            shuffle=True,
+            validation_data=validation_data,
+            **kwargs
+        )
 
     def train(self, train_x, train_y,opt=None):
         # self.approximation = lambda a: np.random.default_rng().random(a.shape[0])
@@ -669,6 +682,21 @@ class doe_model:
             center,
             candidate_indices=candidate_indices,
         )
+        if len(self.active_functions) < 2 and not fit_full_bank:
+            print(
+                "fit function bank partial refresh left too few valid functions; "
+                "retrying full bank"
+            )
+            candidate_indices = np.arange(len(self.functions), dtype=int)
+            fit_full_bank = True
+            self.last_bank_fit_was_full = True
+            self.last_bank_fit_candidate_count = len(candidate_indices)
+            self.Y = self._fit_function_bank(
+                eval_xs,
+                target_values,
+                center,
+                candidate_indices=candidate_indices,
+            )
         fit_bank_elapsed = perf_counter() - fit_bank_start
         fit_scope = "full" if fit_full_bank else "partial"
         print(
@@ -701,7 +729,8 @@ class doe_model:
             f"approx={approx_elapsed:.3f}s "
             f"post_bank={post_bank_elapsed:.3f}s "
             f"async_floor={overlapped_iteration_floor:.3f}s "
-            f"async_max_savings={async_savings_ceiling:.3f}s"
+            f"async_max_savings={async_savings_ceiling:.3f}s "
+            f"bank_rows={len(self.Y)}"
         )
 
         # end_time_ = timer()
