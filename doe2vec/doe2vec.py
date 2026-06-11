@@ -183,8 +183,6 @@ class doe_model:
         use_transform_fitting=True,
         selector_mode="latent",
         precompile_bank_functions=True,
-        full_bank_refresh_interval=10,
-        partial_bank_top_k=None,
         autoencoder_batch_divisor=20,
     ):
         """Doe2Vec model to transform Design of Experiments to feature vectors.
@@ -204,10 +202,6 @@ class doe_model:
             selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
             precompile_bank_functions (bool, optional): Whether to JIT-compile each loaded bank function
                 for the current DOE input shape before the optimization loop starts.
-            full_bank_refresh_interval (int, optional): Refit the full bank every N DOE iterations.
-                Between refreshes, only the best-ranked subset from the previous iteration is refit.
-            partial_bank_top_k (int | None, optional): Number of bank functions to refit between full refreshes.
-                Defaults to max(32, 10% of the bank), capped by the bank size.
             autoencoder_batch_divisor (int, optional): Scales the VAE batch size as corpus_size / divisor.
         """
         self.inp_size_base = inp_size
@@ -249,10 +243,6 @@ class doe_model:
         self.use_transform_fitting = bool(use_transform_fitting)
         self.selector_mode = str(selector_mode)
         self.precompile_bank_functions = bool(precompile_bank_functions)
-        self.full_bank_refresh_interval = max(1, int(full_bank_refresh_interval))
-        self.partial_bank_top_k = (
-            None if partial_bank_top_k is None else max(1, int(partial_bank_top_k))
-        )
         self.autoencoder_batch_divisor = max(1, int(autoencoder_batch_divisor))
         if self.point_selection not in {"local_diverse", "local_nearest"}:
             raise ValueError(f"Unsupported point_selection: {self.point_selection}")
@@ -407,35 +397,11 @@ class doe_model:
         transformed = center_unit.reshape(1, -1) + translation.reshape(1, -1) + centered @ rotation.T
         return np.clip(transformed, 0.01, 0.99)
 
-    def _resolve_partial_bank_top_k(self, total_functions):
-        if total_functions <= 0:
-            return 0
-        if self.partial_bank_top_k is not None:
-            return min(total_functions, self.partial_bank_top_k)
-        return min(total_functions, max(32, int(math.ceil(total_functions * 0.1))))
-
     def _select_bank_candidate_indices(self):
         total_functions = len(self.functions)
         if total_functions == 0:
-            return np.array([], dtype=int), True
-        if self.bank_iteration == 0:
-            return np.arange(total_functions, dtype=int), True
-        if self.full_bank_refresh_interval <= 1:
-            return np.arange(total_functions, dtype=int), True
-        if self.bank_iteration % self.full_bank_refresh_interval == 0:
-            return np.arange(total_functions, dtype=int), True
-        if len(self.bank_ranked_function_indices) < 2:
-            return np.arange(total_functions, dtype=int), True
-
-        top_k = self._resolve_partial_bank_top_k(total_functions)
-        candidate_indices = np.asarray(self.bank_ranked_function_indices[:top_k], dtype=int)
-        candidate_indices = candidate_indices[
-            np.logical_and(candidate_indices >= 0, candidate_indices < total_functions)
-        ]
-        candidate_indices = np.unique(candidate_indices)
-        if len(candidate_indices) < 2:
-            return np.arange(total_functions, dtype=int), True
-        return candidate_indices, False
+            return np.array([], dtype=int)
+        return np.arange(total_functions, dtype=int)
 
     def _fit_function_bank(self, unit_xs, target_values, center, candidate_indices=None):
         if not self.use_transform_fitting:
@@ -673,8 +639,8 @@ class doe_model:
             self.old_xs = None
             eval_xs = xs
         fit_bank_start = perf_counter()
-        candidate_indices, fit_full_bank = self._select_bank_candidate_indices()
-        self.last_bank_fit_was_full = fit_full_bank
+        candidate_indices = self._select_bank_candidate_indices()
+        self.last_bank_fit_was_full = True
         self.last_bank_fit_candidate_count = len(candidate_indices)
         self.Y = self._fit_function_bank(
             eval_xs,
@@ -682,26 +648,10 @@ class doe_model:
             center,
             candidate_indices=candidate_indices,
         )
-        if len(self.active_functions) < 2 and not fit_full_bank:
-            print(
-                "fit function bank partial refresh left too few valid functions; "
-                "retrying full bank"
-            )
-            candidate_indices = np.arange(len(self.functions), dtype=int)
-            fit_full_bank = True
-            self.last_bank_fit_was_full = True
-            self.last_bank_fit_candidate_count = len(candidate_indices)
-            self.Y = self._fit_function_bank(
-                eval_xs,
-                target_values,
-                center,
-                candidate_indices=candidate_indices,
-            )
         fit_bank_elapsed = perf_counter() - fit_bank_start
-        fit_scope = "full" if fit_full_bank else "partial"
         print(
             f'fit function bank time {fit_bank_elapsed:.3f}s '
-            f'({fit_scope}, candidates={self.last_bank_fit_candidate_count})'
+            f'(full, candidates={self.last_bank_fit_candidate_count})'
         )
         if len(self.active_functions) < 2:
             raise ValueError("Too few valid DOE functions remained for the current training round")
