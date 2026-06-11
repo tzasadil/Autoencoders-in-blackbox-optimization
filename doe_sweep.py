@@ -76,7 +76,6 @@ def run_sweep():
         data_dir=SWEEP_DATA_DIR,
         result_folder_prefix=SWEEP_RESULT_PREFIX,
         experiment_note=SWEEP_NOTE,
-        include_best_doe=False,
     )
     summary = summarize_results(results)
     summary.to_csv(SUMMARY_CSV_PATH, index=False)

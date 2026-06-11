@@ -188,37 +188,36 @@ def load_best_vae_model(config_path=DEFAULT_BEST_VAE_CONFIG_PATH, label="best_va
     return build_vae_model(latent_layers, train_records, label=label)
 
 
-def load_best_doe_model(config_path=DEFAULT_BEST_DOE_CONFIG_PATH, label="best_doe"):
+def load_best_doe_hparams(config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
     if not os.path.exists(config_path):
-        return None
+        return 2, 16
     with open(config_path, "r", encoding="utf-8") as handle:
         best_config = json.load(handle)
-    n_samples = int(best_config["n_samples"])
-    latent_dim = int(best_config["latent_dim"])
+    return int(best_config["n_samples"]), int(best_config["latent_dim"])
+
+
+def load_best_doe_model(config_path=DEFAULT_BEST_DOE_CONFIG_PATH, label="best_doe"):
+    n_samples, latent_dim = load_best_doe_hparams(config_path)
+    if not os.path.exists(config_path):
+        return None
     return build_doe_model(n_samples, latent_dim, label=label)
 
 
-def default_configs(include_best_doe=True, best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
+def default_configs(best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
+    n_samples, latent_dim = load_best_doe_hparams(best_doe_config_path)
     gp = build_gp_model()
     nearest = lambda k: (p(models.nearest, k), f"nn{k}")
     elm = lambda nodes: (p(models.elm, nodes), f"elm{nodes}")
 
-    configs = [
+    return [
         [None, 1, None, None],
-        [None, 2, None, build_doe_model(2,16)],
+        [None, 2, None, build_doe_model(n_samples, latent_dim)],
         [None, 2, None, elm(100)],
-        [None, 2, None, build_plain_doe_model(2,16)],
-        [None, 2, None, build_fitloss_model(2,16)],
+        [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
+        [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
         [None, 2, None, gp],
         [None, 2, None, nearest(3)],
     ]
-
-    if include_best_doe:
-        best_doe_model = load_best_doe_model(best_doe_config_path)
-        if best_doe_model is not None:
-            configs.append([None, 4, None, best_doe_model])
-
-    return configs
 
 
 def run(
@@ -228,15 +227,11 @@ def run(
     data_dir=None,
     result_folder_prefix="",
     experiment_note=note,
-    include_best_doe=True,
     best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH,
 ):
     # global dim, budget
     if configs is None:
-        configs = default_configs(
-            include_best_doe=include_best_doe,
-            best_doe_config_path=best_doe_config_path,
-        )
+        configs = default_configs(best_doe_config_path=best_doe_config_path)
 
     # for mult in [2,4,6,8,12,16]:
     #     for pop in [2,4,6,8,12,16]:

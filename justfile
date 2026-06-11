@@ -1,4 +1,4 @@
-run:
+run-main:
     uv run python main.py
 
 graphs:
@@ -6,6 +6,8 @@ graphs:
 
 sweep-doe:
     uv run python doe_sweep.py
+
+run: sweep-doe run-main
 
 plots-doe-sweep:
     uv run python doe_sweep_plots.py
