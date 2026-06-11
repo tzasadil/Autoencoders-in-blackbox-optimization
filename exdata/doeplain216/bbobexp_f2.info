@@ -1,3 +1,0 @@
-suite = 'bbob', funcId = 2, DIM = 2, Precision = 1.000e-08, algId = 'doeplain216', coco_version = '2.6.99rc2', logger = 'bbob', data_format = 'bbob-new2'
-%
-data_f2/bbobexp_f2_DIM2.dat, 1:500|2.0e-08, 2:500|2.0e-06, 3:500|4.7e-06, 4:500|5.0e-09, 5:500|4.0e-04, 71:500|1.6e-04, 72:500|2.6e-06, 73:500|8.0e-04, 74:500|3.7e-07, 75:500|1.2e-08
