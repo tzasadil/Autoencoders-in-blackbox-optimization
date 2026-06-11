@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS
+from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL
 from control_analysis.formatting import write_dataframe_tabular
 from control_analysis.models import ControlDataBundle, EvalWindowGraphSpec
 from control_analysis.plotting import bar, save_and_show, two_layer_tics
@@ -20,8 +20,7 @@ from control_analysis.transforms import add_func_group, default_groupby, improve
 
 
 _WORKER_BUNDLE: ControlDataBundle | None = None
-PRIMARY_DOE_MODEL = "doe_2_8"
-COMPARISON_MODELS = ["none", "gp", "nn3", "doe_plain_2_8", PRIMARY_DOE_MODEL, "fitloss"]
+COMPARISON_MODELS = ["none", "gp", "nn3", PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, "fitloss"]
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
 
 
@@ -286,9 +285,12 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
 
     heatmap_path = output_path / "doe_group_heatmaps.png"
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
-    ordered_labels = [label for _, _, _, label in FUNC_GROUP_LABELS]
+    preferred_labels = [label for _, _, _, label in FUNC_GROUP_LABELS]
+    vs_baseline = doe_group_eval.pivot(index="func_group", columns="dim", values="vs_baseline")
+    model_rank = doe_group_eval.pivot(index="func_group", columns="dim", values="model_rank")
+    ordered_labels = _ordered_labels(vs_baseline.index, preferred_labels)
     sns.heatmap(
-        doe_group_eval.pivot(index="func_group", columns="dim", values="vs_baseline").loc[ordered_labels],
+        vs_baseline.loc[ordered_labels],
         annot=True,
         fmt=".2f",
         cmap="RdYlGn",
@@ -299,7 +301,7 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     axes[0].set_xlabel("Dimension")
     axes[0].set_ylabel("Function group")
     sns.heatmap(
-        doe_group_eval.pivot(index="func_group", columns="dim", values="model_rank").loc[ordered_labels],
+        model_rank.loc[ordered_labels],
         annot=True,
         fmt=".1f",
         cmap="YlGn_r",

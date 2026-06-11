@@ -1,6 +1,33 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
 TABLE_DEFAULT_COLUMN_FORMAT = "|lc|"
 BASELINE_COLOR = "#E04836"
 DEFAULT_COLOR = "forestgreen"
+
+DEFAULT_BEST_DOE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "doe_sweep" / "best_doe_config.json"
+
+
+def load_best_doe_config(path: Path | str = DEFAULT_BEST_DOE_CONFIG_PATH) -> dict:
+    config_path = Path(path)
+    if not config_path.exists():
+        return {"model": "doe_2_8", "n_samples": 2, "latent_dim": 8}
+    with config_path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def resolve_doe_models(path: Path | str = DEFAULT_BEST_DOE_CONFIG_PATH) -> tuple[str, str]:
+    config = load_best_doe_config(path)
+    n_samples = int(config.get("n_samples", 2))
+    latent_dim = int(config.get("latent_dim", 8))
+    primary = str(config.get("model") or f"doe_{n_samples}_{latent_dim}")
+    plain = f"doe_plain_{n_samples}_{latent_dim}"
+    return primary, plain
+
+
+PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL = resolve_doe_models()
 
 FUNC_GROUP_LABELS = [
     ("f1-f5", 1, 5, "Separable Functions"),

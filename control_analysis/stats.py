@@ -12,16 +12,16 @@ import scikit_posthocs as sp
 from statsmodels.stats.weightstats import ttost_paired
 
 import pd_cols
+from control_analysis.constants import PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL
 
 
 ALPHA = 0.05
 DEFAULT_EQUIVALENCE_DELTA = 0.5
 DEFAULT_EQUIVALENCE_SWEEP = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.55, 3.57, 3.6, 4.0]
-PRIMARY_DOE_MODEL = "doe_2_8"
-MODEL_ORDER = [PRIMARY_DOE_MODEL, "doe_plain_2_8", "fitloss", "none", "gp", "nn3"]
+MODEL_ORDER = [PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL, "fitloss", "none", "gp", "nn3"]
 MODEL_LABELS = {
     PRIMARY_DOE_MODEL: "DOE/VAE",
-    "doe_plain_2_8": "DOE plain",
+    PLAIN_DOE_MODEL: "DOE plain",
     "fitloss": "Fitloss",
     "none": "No surrogate",
     "gp": "GP",
