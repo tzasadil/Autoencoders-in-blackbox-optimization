@@ -1,1 +1,7 @@
-{"n_samples": 4, "latent_dim": 8, "model": "doe_4_8"}
+{
+  "model": "doe_2_4",
+  "label": "best_doe",
+  "n_samples": 2,
+  "latent_dim": 4,
+  "selection_metric": "final_rank"
+}

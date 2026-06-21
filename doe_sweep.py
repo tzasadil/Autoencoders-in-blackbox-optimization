@@ -1,10 +1,10 @@
 import json
 import os
 
-import numpy as np
 import pandas as pd
 
 import main
+import ranks
 import storage
 
 
@@ -16,6 +16,7 @@ SWEEP_RESULT_PREFIX = "doe_sweep__"
 SWEEP_PROBLEM_INFO = "function_indices:1-24 dimensions:5 instance_indices:1"
 BEST_DOE_CONFIG_PATH = os.path.join(SWEEP_DATA_DIR, "best_doe_config.json")
 SUMMARY_CSV_PATH = os.path.join(SWEEP_DATA_DIR, "summary.csv")
+DEFAULT_SELECTION_METRIC = "final_rank"
 
 
 def build_sweep_configs():
@@ -26,28 +27,14 @@ def build_sweep_configs():
     return configs
 
 
-def final_value(values):
-    array = np.asarray(values)
-    if array.size == 0:
-        return np.inf
-    return float(array[-1])
-
-
 def summarize_results(df):
-    ranked = df.copy()
-    ranked["final_value"] = ranked["vals"].apply(final_value)
-    ranked["problem_rank"] = ranked.groupby(["function", "dim", "instance"])["final_value"].rank(
-        method="average", ascending=True
-    )
+    ranked = ranks.compute_ranks(df)
     summary = (
         ranked.groupby("model", as_index=False)
         .agg(
-            average_rank=("problem_rank", "mean"),
-            # mean_final_value=("final_value", "mean"),
-            # median_final_value=("final_value", "median"),
-            # run_count=("final_value", "size"),
+            final_rank=("last_rank", "mean"),
         )
-        .sort_values(["average_rank"])#, "mean_final_value", "model"])
+        .sort_values(["final_rank"], ascending=False)
         .reset_index(drop=True)
     )
     return summary
@@ -61,7 +48,7 @@ def extract_best_config(model_name):
         "label": "best_doe",
         "n_samples": int(n_samples),
         "latent_dim": int(latent_dim),
-        "selection_metric": "average_rank",
+        "selection_metric": DEFAULT_SELECTION_METRIC,
     }
 
 

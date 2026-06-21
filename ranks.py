@@ -124,8 +124,8 @@ def compute_ranks(df, eval_limit=None):
         return df 
     
 def plot(df,window_size = 5):
-    df,common_eval = compute_ranks(df)
-    plot_ranks(df,common_eval,window_size)
+    df = compute_ranks(df)
+    plot_ranks(df,window_size)
 
 def get_param_desc_title(df):
     title_stringer = lambda beginning, name: beginning + ' ' + str(df[name].min()) + (('-'+str(df[name].max())) if df[name].min() != df[name].max() else '')
@@ -148,7 +148,8 @@ def plot_ranks(df, window_size = 5):
     ax.grid()
     chunkyfy = lambda arr,window_size: np.array_split(arr, math.ceil(len(arr)/window_size))
 
-    avg_rank_series = df.groupby(['surrogate'])['ranks'].apply(lambda a:np.average(a.to_list(),axis=0)) # rank achieved by each setting in time, avg across fun&dim
+    group_col = "surrogate" if "surrogate" in df.columns else "model"
+    avg_rank_series = df.groupby([group_col])['ranks'].apply(lambda a:np.average(a.to_list(),axis=0)) # rank achieved by each setting in time, avg across fun&dim
     eval_checkpoints = list(map(lambda a: a[-1],chunkyfy(df['evals'].iloc[0],window_size)))
     for (desc, ranks) in avg_rank_series.items():
         # ax.plot(common_eval, ranks,label=desc, linestyle='-', marker='|')
@@ -157,9 +158,14 @@ def plot_ranks(df, window_size = 5):
 
     #sort legend  
     def sort_legend(ax, values):
-        order = np.argsort(values)[::-1]
-        handles, labels = plt.gca().get_legend_handles_labels()
-        ax.legend([handles[idx] for idx in order],[labels[idx]+'-->'+str(round(values[idx],2)) for idx in order])
+        sorted_labels = values.sort_values(ascending=False).index.tolist()
+        handles, labels = ax.get_legend_handles_labels()
+        handle_map = dict(zip(labels, handles))
+        legend_handles = [handle_map[label] for label in sorted_labels if label in handle_map]
+        legend_labels = [
+            f"{label}-->{round(values[label], 2)}" for label in sorted_labels if label in handle_map
+        ]
+        ax.legend(legend_handles, legend_labels)
     
     avg_rank = avg_rank_series.apply(np.average) # avg across time from avg across fun&dim, 'final score' of a setting
     sort_legend(ax, avg_rank)
@@ -202,15 +208,9 @@ def coco_plot(out_folders):
     
     ### coco plotting 
     # cocopp.genericsettings.background = {None: cocopp.bbob.get_all("2009/")}
-    # npz data may store Windows-style paths (exdata\\algo); Linux needs os.sep.
-    norm = [
-        os.path.normpath(str(p).replace("\\", os.sep))
-        for p in out_folders
-        if not pd.isna(p)
-    ]
     cocopp.genericsettings.isExpensive = True
     cocopp.genericsettings.xlimit_expensive = 250.0
     cocopp.genericsettings.isConv = True
-    cocopp.main(" ".join(norm))
+    cocopp.main(' '.join(out_folders))
     # cocopp.main(observer.result_folder)  # re-run folders look like "...-001" etc
     webbrowser.open("file://" + os.getcwd() + "/ppdata/index.html")

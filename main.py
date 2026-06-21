@@ -213,10 +213,10 @@ def default_configs(best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
         [None, 1, None, None],
         [None, 2, None, build_doe_model(n_samples, latent_dim)],
         [None, 2, None, elm(100)],
-        [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
-        [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
         [None, 2, None, gp],
         [None, 2, None, nearest(3)],
+        [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
+        [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
     ]
 
 
@@ -400,12 +400,13 @@ def single_config(
 
 def coco_gen():
     df_og = storage.merge_and_load()
-    # df_og = run(df_og)
-
-    # from doe2vec import exp_bbob
-
-    df = df_og.copy()
-    df = df[df["note"] == ""]
+    if df_og is None or df_og.empty:
+        print("No experiment data found in data/. Run `optim` first.")
+        return
+    df = df_og[df_og["note"] == ""]
+    if df.empty:
+        print("No main experiments found (note == ''). Run `optim` first.")
+        return
     out_folders = df["coco_directory"].unique().tolist()
     ranks.coco_plot(out_folders)
 
@@ -418,19 +419,6 @@ def execute_optimization():
 
 
 if __name__ == "__main__":
-    # ['pure', 'gp', 'elm', rbf]
-    # df = storage.merge_and_load()
-    # df_og = storage.merge_and_load()
-    # df = run(df)
-    # plot(df)
-    # datastore_store(load_data(),'w')
-
     df_og = storage.merge_and_load()
-    # df_og = run(df_og)
-
-    # from doe2vec import exp_bbob
-
-    df = df_og.copy()
-    df = df[df["note"] == ""]
-    out_folders = df["coco_directory"].unique().tolist()
-    ranks.coco_plot(out_folders)
+    df_og = run(df_og)
+    coco_gen()
