@@ -26,6 +26,7 @@ import cocoex.function
 import cocoex, cocopp  # experimentation and post-processing modules
 from numpy.random import rand  # for randomised restarts
 import os, webbrowser  # to show post-processed results in the browser
+import shutil
 import evo
 from timeit import default_timer as timer
 import pandas as pd
@@ -42,6 +43,7 @@ import math
 import functools
 import json
 from itertools import takewhile, dropwhile
+from pathlib import Path
 
 matplotlib.use("TkAgg")
 os.environ["KERAS_BACKEND"] = "tensorflow"
@@ -168,6 +170,10 @@ def build_fitloss_doe_model(n_samples, latent_dim, label=None):
     return build_fitloss_model(n_samples, latent_dim, label=label)
 
 
+def build_oracle_model(label="oracle"):
+    return models.OracleSelector(), label
+
+
 def build_vae_model(latent_layers, train_records, label=None):
     latent_desc = "x".join(format_ratio(layer) for layer in latent_layers)
     model_name = label or f"vae_latent_{latent_desc}_inputs_{train_records}"
@@ -211,12 +217,13 @@ def default_configs(best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
 
     return [
         [None, 1, None, None],
-        [None, 2, None, build_doe_model(n_samples, latent_dim)],
-        [None, 2, None, elm(100)],
-        [None, 2, None, gp],
-        [None, 2, None, nearest(3)],
-        [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
-        [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
+        [None, 2, None, build_oracle_model()],
+        # [None, 2, None, build_doe_model(n_samples, latent_dim)],
+        # [None, 2, None, elm(100)],
+        # [None, 2, None, gp],
+        # [None, 2, None, nearest(3)],
+        # [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
+        # [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
     ]
 
 
@@ -291,9 +298,13 @@ def single_config(
         + f"{model_name}_"
         + f"{experiment_note}"
     )
-    sanitized_model_name = sanitize_name(model_name) if len(model_name) > 0 else "nosurrogate"
+    sanitized_model_name = (
+        sanitize_name(model_name) if len(model_name) > 0 else "nosurrogate"
+    )
     opts = {
-        "algorithm_name": sanitized_model_name if len(model_name) > 0 else "no_surrogate",
+        "algorithm_name": sanitized_model_name
+        if len(model_name) > 0
+        else "no_surrogate",
         "algorithm_info": '"autoencoder_surrogate"',
         "result_folder": f"{result_folder_prefix}{sanitized_model_name}"
         if len(model_name) > 0
@@ -336,6 +347,8 @@ def single_config(
             surrogate = model_f.load_or_create(dim)
             cached_doe_functions = model_f.functions
             surrogate.executor = threadpool
+        elif isinstance(model_f, models.OracleSelector):
+            surrogate = model_f
         else:
             surrogate = models.Surrogate(model_f, dim_red_f, **surrogate_kwargs)
         observer.observe(problem)
@@ -372,7 +385,7 @@ def single_config(
             fun,
             dim,
             elapsed,
-            observer.result_folder,
+            storage.normalize_stored_path(observer.result_folder),
             timestamp,
             budget,
             experiment_note if gen_mult != 1 else "",
@@ -407,8 +420,56 @@ def coco_gen():
     if df.empty:
         print("No main experiments found (note == ''). Run `optim` first.")
         return
-    out_folders = df["coco_directory"].unique().tolist()
-    ranks.coco_plot(out_folders)
+    out_folders = [
+        storage.normalize_stored_path(p) for p in df["coco_directory"].unique().tolist()
+    ]
+    alias_root = Path(".coco_inputs")
+    if alias_root.exists():
+        shutil.rmtree(alias_root)
+    alias_root.mkdir(parents=True)
+
+    alias_map = {
+        "no_surrogate": "no_surrogate",
+        "doe24": "doe",
+        "doeplain24": "doe_plain",
+        "elm100": "elm",
+        "fitloss": "fitloss",
+        "gp": "gp",
+        "nn3": "nn",
+        "oracle": "oracle",
+    }
+    aliased_out_folders = []
+    for folder in out_folders:
+        source = Path(folder)
+        alias_name = alias_map.get(source.name, sanitize_name(source.name))
+        alias_path = alias_root / alias_name
+        if alias_path.exists() or alias_path.is_symlink():
+            alias_path.unlink()
+        alias_path.symlink_to(source.resolve())
+        aliased_out_folders.append(alias_name)
+
+    alias_ppdata = alias_root / "ppdata"
+    if alias_ppdata.exists():
+        shutil.rmtree(alias_ppdata)
+
+    previous_cwd = Path.cwd()
+    os.chdir(alias_root)
+    try:
+        ranks.coco_plot(aliased_out_folders)
+    finally:
+        os.chdir(previous_cwd)
+
+    if alias_ppdata.exists():
+        target_ppdata = Path("ppdata")
+        target_ppdata.mkdir(exist_ok=True)
+        for generated_item in alias_ppdata.iterdir():
+            destination = target_ppdata / generated_item.name
+            if destination.exists() or destination.is_symlink():
+                if destination.is_dir() and not destination.is_symlink():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink()
+            shutil.move(str(generated_item), str(destination))
 
 
 def execute_optimization():

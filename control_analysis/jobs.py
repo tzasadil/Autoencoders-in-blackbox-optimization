@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL
+from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, display_model_label
 from control_analysis.formatting import write_dataframe_tabular
 from control_analysis.models import ControlDataBundle, EvalWindowGraphSpec
 from control_analysis.plotting import bar, save_and_show, two_layer_tics
@@ -20,7 +20,7 @@ from control_analysis.transforms import add_func_group, default_groupby, improve
 
 
 _WORKER_BUNDLE: ControlDataBundle | None = None
-COMPARISON_MODELS = ["none", "gp", "nn3", PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, "fitloss"]
+COMPARISON_MODELS = ["none", "oracle", "gp", "nn3", "elm100", PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, "fitloss"]
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
 
 
@@ -52,7 +52,7 @@ def _plot_metric_bar(
     plotting_df = plotting_df.dropna(subset=[value_column])
     if plotting_df.empty:
         return None
-    ax = bar(plotting_df, y_name=value_column)
+    ax = bar(plotting_df, y_name=value_column, index_mapper=display_model_label)
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     return save_and_show(output_name, show=False, output_dir=output_dir)
@@ -252,9 +252,9 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     doe_rank = rank_within_group[rank_within_group["model"] == PRIMARY_DOE_MODEL][["func_group", "dim", "model_rank"]]
     doe_group_eval = doe_group_eval.merge(doe_rank, on=["func_group", "dim"], how="left")
 
-    doe_group_eval["vs_baseline"] = doe_group_eval["baseline_avg_rank"] - doe_group_eval["doe_avg_rank"]
-    doe_group_eval["vs_peer_mean"] = doe_group_eval["peer_avg_rank"] - doe_group_eval["doe_avg_rank"]
-    doe_group_eval["vs_best_non_doe"] = doe_group_eval["best_non_doe_avg_rank"] - doe_group_eval["doe_avg_rank"]
+    doe_group_eval["vs_baseline"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["baseline_avg_rank"]
+    doe_group_eval["vs_peer_mean"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["peer_avg_rank"]
+    doe_group_eval["vs_best_non_doe"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["best_non_doe_avg_rank"]
     doe_group_eval = doe_group_eval.sort_values(["dim", "func_group_key"])
 
     doe_by_dim = doe_group_eval.groupby("dim", as_index=False).agg(
@@ -297,7 +297,7 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
         center=0,
         ax=axes[0],
     )
-    axes[0].set_title("DOE vs baseline none\npositive = DOE better")
+    axes[0].set_title("DOE minus baseline\npositive = DOE better")
     axes[0].set_xlabel("Dimension")
     axes[0].set_ylabel("Function group")
     sns.heatmap(
@@ -386,7 +386,7 @@ def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpe
         "surrogate": "first",
         "gen_mult": "first",
     })
-    ax = bar(grouped, y_name="avg_rank", print_table=title, table_path=table_path, baselines=bundle.baselines)
+    ax = bar(grouped, y_name="avg_rank", print_table=title, table_path=table_path, baselines=bundle.baselines, index_mapper=display_model_label)
     ax.set_title(title)
     return save_and_show(graph_name, show=False, output_dir=output_dir)
 
@@ -487,7 +487,7 @@ def plot_elapsed_time_by_dim_red_kind(bundle: ControlDataBundle, output_dir: str
 def plot_model_comparison(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
     df = bundle.df_og.copy()
     df = df[(df["dim_red_kind"] == "none") & (df["pop_size"] == 48) & (df["true_ratio"].map(Fraction) == Fraction(1, 8))]
-    ax = bar(df, "model")
+    ax = bar(df, "model", index_mapper=display_model_label)
     two_layer_tics(ax)
     return save_and_show("model_comparison", show=False, output_dir=output_dir)
 

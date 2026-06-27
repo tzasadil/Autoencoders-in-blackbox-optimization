@@ -2,13 +2,14 @@
 \toprule
 Model & Nemenyi $p$ vs DOE & Significant vs DOE \\
 \midrule
-DOE/VAE & -- & -- \\
-DOE plain & 0.13904 & no \\
-Fitloss & 0.000796059 & yes \\
-No surrogate & 1.97616e-06 & yes \\
-GP & 1.11022e-16 & yes \\
+DOE & -- & -- \\
+DOE plain & 0.999987 & no \\
+ELM & 1.07087e-06 & yes \\
+Fitloss & 0.932513 & no \\
+No surrogate & 0.00578509 & yes \\
+GP & 6.56875e-12 & yes \\
 NN & 0 & yes \\
 \midrule
-\multicolumn{3}{l}{Friedman $\chi^2=271.60$, $p = 1.26636e-56$, Kendall's $W=0.075$, $N=720$ blocks.} \\
+\multicolumn{3}{l}{Friedman $\chi^2=275.55$, $p = 1.4062e-56$, Kendall's $W=0.064$, $N=720$ blocks.} \\
 \bottomrule
 \end{tabular}

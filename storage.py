@@ -27,6 +27,13 @@ def resolve_data_dir(data_dir=None):
     return data_dir or os.environ.get('BBOB_DATA_DIR', DEFAULT_DATA_DIR)
 
 
+def normalize_stored_path(path):
+    """Normalize paths saved on another OS (e.g. Windows backslashes on Linux)."""
+    if not path:
+        return path
+    return os.path.normpath(str(path).replace('\\', '/'))
+
+
 def store_data(df, desc='df', data_dir=None):
     if df.empty: return
     data_dir = resolve_data_dir(data_dir)

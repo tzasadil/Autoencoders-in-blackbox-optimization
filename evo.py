@@ -142,8 +142,13 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
         xs = next_gen(generated_population)
         while true_evals_left > 0:
             xs = next_gen(generated_population)
-            ys = surrogate(xs) 
-            xs,ys = np.array(xs), np.array(ys)
+            xs = np.array(xs)
+            correct_ys = np.array([cloned_problem(x) for x in xs])
+            if getattr(surrogate, "selection_mode", "") == "oracle":
+                ys = correct_ys.copy()
+            else:
+                ys = surrogate(xs)
+            ys = np.array(ys)
             k_accepted = min(true_evals_left,optimizer_popsize)
             idx = np.argsort(ys)
             top_k_xs = xs[idx][:k_accepted]  
@@ -157,7 +162,6 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
             generation += 1    
 
             #corr stat computation
-            correct_ys = np.array([cloned_problem(x) for x in xs])
             sp = stats.spearmanr(correct_ys, ys)
             spearman_corr.append(sp.correlation)
             spearman_pval.append(sp.pvalue)

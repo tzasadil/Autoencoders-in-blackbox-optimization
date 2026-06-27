@@ -12,21 +12,14 @@ import scikit_posthocs as sp
 from statsmodels.stats.weightstats import ttost_paired
 
 import pd_cols
-from control_analysis.constants import PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL
+from control_analysis.constants import MODEL_DISPLAY_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL
 
 
 ALPHA = 0.05
 DEFAULT_EQUIVALENCE_DELTA = 0.5
 DEFAULT_EQUIVALENCE_SWEEP = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.55, 3.57, 3.6, 4.0]
-MODEL_ORDER = [PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL, "fitloss", "none", "gp", "nn3"]
-MODEL_LABELS = {
-    PRIMARY_DOE_MODEL: "DOE/VAE",
-    PLAIN_DOE_MODEL: "DOE plain",
-    "fitloss": "Fitloss",
-    "none": "No surrogate",
-    "gp": "GP",
-    "nn3": "NN",
-}
+MODEL_ORDER = [PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL, "elm100", "fitloss", "none", "oracle", "gp", "nn3"]
+MODEL_LABELS = MODEL_DISPLAY_LABELS
 
 
 def auc(df: pd.DataFrame) -> pd.Series:
@@ -159,6 +152,54 @@ def find_first_equivalent_margin(sweep_results: list[dict[str, float | int | boo
     return None
 
 
+def compute_pairwise_contrast(
+    df: pd.DataFrame,
+    left_model: str,
+    right_model: str,
+    alpha: float = ALPHA,
+) -> dict[str, object]:
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = wide[[column for column in MODEL_ORDER if column in wide.columns]].dropna()
+    left = wide[left_model].to_numpy()
+    right = wide[right_model].to_numpy()
+    diff = left - right
+    ci_90 = scipy_stats.t.interval(
+        1 - 2 * alpha,
+        len(diff) - 1,
+        loc=float(np.mean(diff)),
+        scale=scipy_stats.sem(diff),
+    )
+    wilcoxon = scipy_stats.wilcoxon(diff)
+    return {
+        "Contrast": f"{MODEL_LABELS.get(left_model, left_model)} - {MODEL_LABELS.get(right_model, right_model)}",
+        "Mean difference": float(np.mean(diff)),
+        "CI low": float(ci_90[0]),
+        "CI high": float(ci_90[1]),
+        "Wilcoxon p": float(wilcoxon.pvalue),
+        "Significant": "yes" if float(wilcoxon.pvalue) < alpha else "no",
+    }
+
+
+def export_pairwise_contrast_table(rows: list[dict[str, object]], output_path: str | os.PathLike[str]) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line_break = r"\\"
+    lines = [
+        "\\begin{tabular}{lccc}",
+        "\\toprule",
+        f"Contrast & Mean diff. & 90\\% CI & Wilcoxon $p$ {line_break}",
+        "\\midrule",
+    ]
+    for row in rows:
+        ci_text = f"[{row['CI low']:.2f}, {row['CI high']:.2f}]"
+        lines.append(
+            f"{row['Contrast']} & {row['Mean difference']:.2f} & {ci_text} & {row['Wilcoxon p']:.3g} {line_break}"
+        )
+    lines.extend(["\\bottomrule", "\\end{tabular}"])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def export_significance_table(
     table: pd.DataFrame,
     output_path: str | os.PathLike[str],
@@ -209,6 +250,10 @@ def write_stats_report(
     equivalence = compute_equivalence_test(comparison_df, delta=equivalence_delta)
     sweep_results = sweep_equivalence_margins(comparison_df, margins=equivalence_sweep)
     first_equivalent_margin = find_first_equivalent_margin(sweep_results)
+    pairwise_contrasts = [
+        compute_pairwise_contrast(comparison_df, PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL),
+        compute_pairwise_contrast(comparison_df, PRIMARY_DOE_MODEL, "fitloss"),
+    ]
 
     output_path = Path(output_dir)
     latex_path = export_significance_table(
@@ -220,12 +265,14 @@ def write_stats_report(
         blocks=blocks,
     )
     json_path = output_path / "stat_significance_summary.json"
+    pairwise_latex_path = export_pairwise_contrast_table(pairwise_contrasts, output_path / "doe_family_contrasts.tex")
     payload = {
         "friedman_statistic": friedman_stat,
         "friedman_pvalue": friedman_p,
         "kendalls_w": kendalls_w,
         "blocks": blocks,
         "table": table.to_dict(orient="records"),
+        "pairwise_contrasts": pairwise_contrasts,
         "equivalence": equivalence,
         "equivalence_sweep": sweep_results,
         "first_equivalent_margin": first_equivalent_margin,
@@ -234,6 +281,7 @@ def write_stats_report(
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {
         "latex_path": latex_path,
+        "pairwise_latex_path": pairwise_latex_path,
         "json_path": json_path,
         "comparison_rows": len(comparison_df),
         "friedman_statistic": friedman_stat,

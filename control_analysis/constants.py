@@ -29,6 +29,22 @@ def resolve_doe_models(path: Path | str = DEFAULT_BEST_DOE_CONFIG_PATH) -> tuple
 
 PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL = resolve_doe_models()
 
+MODEL_DISPLAY_LABELS = {
+    PRIMARY_DOE_MODEL: "DOE",
+    PLAIN_DOE_MODEL: "DOE plain",
+    "elm100": "ELM",
+    "fitloss": "Fitloss",
+    "none": "No surrogate",
+    "oracle": "Oracle",
+    "gp": "GP",
+    "nn3": "NN",
+}
+
+
+def display_model_label(model_name: object) -> str:
+    text = str(model_name)
+    return MODEL_DISPLAY_LABELS.get(text, text.replace("_", " "))
+
 FUNC_GROUP_LABELS = [
     ("f1-f5", 1, 5, "Separable Functions"),
     ("f6-f9", 6, 9, "Functions with low or moderate conditioning"),

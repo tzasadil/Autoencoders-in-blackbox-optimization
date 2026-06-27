@@ -192,8 +192,18 @@ class Surrogate:
         self.dim_red = self.dim_red_f(xx,self.dim_red)
         latentX = self.dim_red(xx)
         self.model = self.model_f(latentX,yy,self.model)
-        
-        
+
+
+class OracleSelector:
+    def __init__(self):
+        self.inp_size = 0
+        self.selection_mode = "oracle"
+
+    def __call__(self, x):
+        return np.zeros(x.shape[0])
+
+    def train(self, train_x, train_y, opt=None):
+        return
 
 
 if __name__ == '__main__':
