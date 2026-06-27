@@ -3,10 +3,12 @@ import pandas as pd
 import os
 import glob
 import numpy.ma as ma
+from pathlib import Path
 import pd_cols
 from doe2vec.doe2vec import doe_model 
 
 DEFAULT_DATA_DIR = 'data'
+MODEL_RUNS_DIRNAME = "model_runs"
 
 # arr2str = lambda arr: ' '.join(str(x) for x in arr)
 def arr2str(arr): 
@@ -92,6 +94,41 @@ def merge_and_load(data_dir=None):
     if len(numpy_files)>1:
         overwrite(df, data_dir=data_dir)
     return df
+
+
+def discover_data_dirs(data_dir=None):
+    root = Path(resolve_data_dir(data_dir))
+    if not root.exists():
+        return []
+    preferred_root = root / MODEL_RUNS_DIRNAME
+    if preferred_root.exists():
+        preferred_children = []
+        for child in sorted(preferred_root.iterdir()):
+            if child.is_dir() and any(child.glob("*.npz")):
+                preferred_children.append(str(child))
+        if preferred_children:
+            return preferred_children
+    direct_npz = sorted(root.glob("*.npz"))
+    if direct_npz:
+        return [str(root)]
+    if root.name == MODEL_RUNS_DIRNAME:
+        child_dirs = []
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and any(child.glob("*.npz")):
+                child_dirs.append(str(child))
+        return child_dirs
+    return []
+
+
+def load_aggregate_data(data_dir=None):
+    data_dirs = discover_data_dirs(data_dir)
+    if not data_dirs:
+        return None
+    dfs = [merge_and_load(directory) for directory in data_dirs]
+    dfs = [df for df in dfs if df is not None and not df.empty]
+    if not dfs:
+        return None
+    return ensure_storage_columns(pd.concat(dfs, ignore_index=True))
     
 
 def overwrite(df, data_dir=None):
@@ -108,5 +145,5 @@ def overwrite(df, data_dir=None):
 
 
 def load_data(data_dir=None):
-    return merge_and_load(data_dir=data_dir)
+    return load_aggregate_data(data_dir=data_dir)
     

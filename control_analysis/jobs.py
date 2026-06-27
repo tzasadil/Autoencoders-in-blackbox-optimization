@@ -507,22 +507,44 @@ def _render_eval_window_graph_worker(spec: EvalWindowGraphSpec, output_dir: str 
     return render_eval_window_graph(bundle=bundle, spec=spec, output_dir=output_dir)
 
 
-def run_eval_window_graphs(data_dir: str | os.PathLike[str] | None = None, output_dir: str | os.PathLike[str] = "graphs", max_workers: int | None = None) -> list[Path]:
+def run_eval_window_graphs(
+    data_dir: str | os.PathLike[str] | None = None,
+    output_dir: str | os.PathLike[str] = "graphs",
+    max_workers: int | None = None,
+) -> list[Path]:
     specs = _build_eval_window_graph_specs()
     if max_workers is not None and max_workers <= 1:
         from control_analysis.data import load_control_bundle
 
         bundle = load_control_bundle(data_dir=data_dir)
-        return [path for path in (render_eval_window_graph(bundle=bundle, spec=spec, output_dir=output_dir) for spec in specs) if path is not None]
+        return [
+            path
+            for path in (
+                render_eval_window_graph(bundle=bundle, spec=spec, output_dir=output_dir)
+                for spec in specs
+            )
+            if path is not None
+        ]
 
     worker_count = max_workers or min(len(specs), os.cpu_count() or 1)
     if worker_count <= 1:
         from control_analysis.data import load_control_bundle
 
         bundle = load_control_bundle(data_dir=data_dir)
-        return [path for path in (render_eval_window_graph(bundle=bundle, spec=spec, output_dir=output_dir) for spec in specs) if path is not None]
+        return [
+            path
+            for path in (
+                render_eval_window_graph(bundle=bundle, spec=spec, output_dir=output_dir)
+                for spec in specs
+            )
+            if path is not None
+        ]
 
-    with ProcessPoolExecutor(max_workers=worker_count, initializer=_init_eval_window_worker, initargs=(data_dir,)) as executor:
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        initializer=_init_eval_window_worker,
+        initargs=(data_dir,),
+    ) as executor:
         results = executor.map(_render_eval_window_graph_worker, specs, repeat(output_dir))
         return [path for path in results if path is not None]
 

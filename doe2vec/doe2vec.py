@@ -26,8 +26,6 @@ from doe2vec.modulesRandFunc.function_bank import (
 )
 from doe2vec.modulesRandFunc import generate_tree as genTree
 from doe2vec.modulesRandFunc import generate_tree2exp as genTree2exp
-from concurrent.futures import ProcessPoolExecutor
-
 from scipy.spatial import distance_matrix
 from scipy.optimize import linear_sum_assignment, minimize
 
@@ -226,7 +224,6 @@ class doe_model:
         self.fun_save_path = f'doe_saves/functions_jax.npy'
         # self.model_save_path = f'doe_saves/{self.inp_size}_{self.latent_dim}'
         seed(self.seed)
-        self.executor:ProcessPoolExecutor =  None
         # worker_n = 8
         # self.worker_conns, child_conns = list(zip(*[Pipe() for _ in range(worker_n)]))
         # self.eval_workers = [Process(target=evaluator, args=(conn,)) for conn in child_conns]

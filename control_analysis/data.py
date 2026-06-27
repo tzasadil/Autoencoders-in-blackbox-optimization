@@ -107,7 +107,7 @@ def df_enhance(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_control_bundle(data_dir: str | os.PathLike[str] | None = None) -> ControlDataBundle:
-    df_og = storage.merge_and_load(data_dir=data_dir)
+    df_og = storage.load_aggregate_data(data_dir=data_dir)
     if df_og is None or df_og.empty:
         raise RuntimeError("No control notebook data found.")
     df_og = df_og[(df_og["note"] == "") | (df_og["note"] == "none")].copy()

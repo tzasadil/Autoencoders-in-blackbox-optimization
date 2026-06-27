@@ -19,9 +19,6 @@ from __future__ import division, print_function
 import cocopp.preparetexforhtml
 import cocopp.testbedsettings
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor
-
-threadpool = ProcessPoolExecutor(max_workers=16)
 import cocoex.function
 import cocoex, cocopp  # experimentation and post-processing modules
 from numpy.random import rand  # for randomised restarts
@@ -45,6 +42,9 @@ import functools
 import json
 from itertools import takewhile, dropwhile
 from pathlib import Path
+import re
+import subprocess
+import sys
 
 matplotlib.use("TkAgg")
 os.environ["KERAS_BACKEND"] = "tensorflow"
@@ -113,11 +113,200 @@ func_names = [
 cached_doe_functions = None
 
 
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_index_spec(spec):
+    indices = []
+    for chunk in str(spec).split(","):
+        part = chunk.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            start = int(start_text)
+            end = int(end_text)
+            step = 1 if end >= start else -1
+            indices.extend(range(start, end + step, step))
+        else:
+            indices.append(int(part))
+    return indices
+
+
+def format_index_spec(indices):
+    ordered = sorted(set(int(index) for index in indices))
+    if not ordered:
+        return ""
+    ranges = []
+    start = ordered[0]
+    end = ordered[0]
+    for value in ordered[1:]:
+        if value == end + 1:
+            end = value
+            continue
+        ranges.append(f"{start}-{end}" if start != end else str(start))
+        start = end = value
+    ranges.append(f"{start}-{end}" if start != end else str(start))
+    return ",".join(ranges)
+
+
+def get_problem_info_indices(problem_info, key="instance_indices"):
+    match = re.search(rf"{key}:([0-9,\-]+)", str(problem_info))
+    if match is None:
+        return []
+    return parse_index_spec(match.group(1))
+
+
+def set_problem_info_indices(problem_info, indices, key="instance_indices"):
+    index_spec = format_index_spec(indices)
+    if not index_spec:
+        raise ValueError(f"{key} resolved to an empty set")
+    replacement = f"{key}:{index_spec}"
+    if re.search(rf"{key}:[0-9,\-]+", str(problem_info)):
+        return re.sub(rf"{key}:[0-9,\-]+", replacement, str(problem_info))
+    return f"{problem_info} {replacement}".strip()
+
+
+def resolve_problem_info(problem_info=DEFAULT_PROBLEM_INFO):
+    resolved = os.environ.get("BBOB_PROBLEM_INFO", problem_info)
+    instance_range = os.environ.get("BBOB_INSTANCE_RANGE")
+    if instance_range:
+        resolved = set_problem_info_indices(resolved, parse_index_spec(instance_range))
+    return resolved
+
+
+def config_model_name(config):
+    model = config[3]
+    if not model:
+        return "no_surrogate"
+    return str(model[1])
+
+
+def filter_configs(configs):
+    model_filter = os.environ.get("BBOB_MODEL_FILTER", "").strip()
+    if not model_filter:
+        return configs
+    requested = {part.strip() for part in model_filter.split(",") if part.strip()}
+    filtered = []
+    for config in configs:
+        name = config_model_name(config)
+        aliases = {name, sanitize_name(name)}
+        if name == "no_surrogate":
+            aliases.add("none")
+        if aliases & requested:
+            filtered.append(config)
+    if not filtered:
+        raise ValueError(f"BBOB_MODEL_FILTER matched no configs: {sorted(requested)}")
+    return filtered
+
+
+def resolve_result_folder_prefix():
+    explicit = os.environ.get("BBOB_RESULT_FOLDER_PREFIX")
+    if explicit is not None:
+        return explicit
+    parts = []
+    run_tag = os.environ.get("BBOB_RUN_TAG", "").strip()
+    if run_tag:
+        parts.append(sanitize_name(run_tag))
+    return "" if not parts else "_".join(parts) + "_"
+
+
+def resolve_runtime_settings(
+    problem_info=DEFAULT_PROBLEM_INFO,
+    best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH,
+):
+    configs = filter_configs(default_configs(best_doe_config_path=best_doe_config_path))
+    explicit_data_dir = os.environ.get("BBOB_DATA_DIR")
+    default_model_root = os.path.join(storage.resolve_data_dir(), storage.MODEL_RUNS_DIRNAME)
+    resolved_data_dir = default_model_root if explicit_data_dir is None else storage.resolve_data_dir()
+    if (
+        explicit_data_dir is None
+        and os.environ.get("BBOB_MODEL_FILTER")
+        and not env_flag("BBOB_PARALLEL_WORKER")
+        and len(configs) == 1
+    ):
+        resolved_data_dir = worker_data_dir(resolved_data_dir, config_model_name(configs[0]))
+    settings = {
+        "problem_info": resolve_problem_info(problem_info),
+        "configs": configs,
+        "data_dir": resolved_data_dir,
+        "result_folder_prefix": resolve_result_folder_prefix(),
+        "skip_plot": env_flag("BBOB_SKIP_PLOT"),
+        "skip_coco": env_flag("BBOB_SKIP_COCO"),
+    }
+    model_names = [config_model_name(config) for config in configs]
+    print(
+        "runtime settings:",
+        {
+            "problem_info": settings["problem_info"],
+            "data_dir": settings["data_dir"],
+            "result_folder_prefix": settings["result_folder_prefix"],
+            "models": model_names,
+            "skip_plot": settings["skip_plot"],
+            "skip_coco": settings["skip_coco"],
+        },
+    )
+    return settings
+
+
+def should_parallelize_models():
+    return not env_flag("BBOB_PARALLEL_WORKER") and not os.environ.get("BBOB_MODEL_FILTER")
+
+
+def worker_data_dir(root_data_dir, model_name):
+    return os.path.join(root_data_dir, sanitize_name(model_name))
+
+
+def run_model_workers(settings):
+    root_data_dir = settings["data_dir"]
+    os.makedirs(root_data_dir, exist_ok=True)
+    commands = []
+    for config in settings["configs"]:
+        model_name = config_model_name(config)
+        env = os.environ.copy()
+        env["BBOB_PARALLEL_WORKER"] = "1"
+        env["BBOB_MODEL_FILTER"] = model_name
+        env["BBOB_DATA_DIR"] = worker_data_dir(root_data_dir, model_name)
+        env["BBOB_SKIP_PLOT"] = "1"
+        env["BBOB_SKIP_COCO"] = "1"
+        env["BBOB_RESULT_FOLDER_PREFIX"] = ""
+        command = [sys.executable, "-c", "import main; main.execute_optimization()"]
+        commands.append((model_name, command, env))
+
+    processes = []
+    for model_name, command, env in commands:
+        print(f"starting model worker: {model_name}")
+        processes.append((model_name, subprocess.Popen(command, cwd=str(Path(__file__).resolve().parent), env=env)))
+
+    failures = []
+    for model_name, process in processes:
+        exit_code = process.wait()
+        if exit_code != 0:
+            failures.append((model_name, exit_code))
+        else:
+            print(f"model worker finished: {model_name}")
+
+    if failures:
+        raise RuntimeError(f"Model workers failed: {failures}")
+
+
 def main(df=None):
+    settings = resolve_runtime_settings()
     if df is None:
-        df = storage.load_data()
-    df = run(df)
-    plot(df)
+        df = storage.load_data(data_dir=settings["data_dir"])
+    df = run(
+        df,
+        configs=settings["configs"],
+        problem_info=settings["problem_info"],
+        data_dir=settings["data_dir"],
+        result_folder_prefix=settings["result_folder_prefix"],
+    )
+    if not settings["skip_plot"]:
+        plot(df)
 
 
 def plot(df=None):
@@ -244,16 +433,16 @@ def default_configs(best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
 
     return [
         [None, 1, None, None],
+        [None, 2, None, build_doe_model(n_samples, latent_dim)],
+        [None, 2, None, elm(100)],
+        [None, 2, None, gp],
+        [None, 2, None, nearest(3)],
+        [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
+        [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
         [None, 2, None, build_oracle_model()],
         [None, 2, None, build_negative_oracle_model()],
         [None, 2, None, build_cluster_random_half_model(n_clusters=4)],
         [None, 2, None, build_cluster_best_half_oracle_model(n_clusters=4)],
-        # [None, 2, None, build_doe_model(n_samples, latent_dim)],
-        # [None, 2, None, elm(100)],
-        # [None, 2, None, gp],
-        # [None, 2, None, nearest(3)],
-        # [None, 2, None, build_plain_doe_model(n_samples, latent_dim)],
-        # [None, 2, None, build_fitloss_model(n_samples, latent_dim)],
     ]
 
 
@@ -376,7 +565,6 @@ def single_config(
             model_f.functions = cached_doe_functions
             surrogate = model_f.load_or_create(dim)
             cached_doe_functions = model_f.functions
-            surrogate.executor = threadpool
         elif isinstance(model_f, models.SelectionPolicy):
             surrogate = model_f
         else:
@@ -455,8 +643,8 @@ def single_config(
     return res
 
 
-def coco_gen():
-    df_og = storage.merge_and_load()
+def coco_gen(data_dir=None):
+    df_og = storage.load_aggregate_data(data_dir=data_dir)
     if df_og is None or df_og.empty:
         print("No experiment data found in data/. Run `optim` first.")
         return
@@ -520,13 +708,51 @@ def coco_gen():
 
 
 def execute_optimization():
-    df_og = storage.merge_and_load()
-    df_og = run(df_og)
-    plot(df_og)
+    settings = resolve_runtime_settings()
+    if should_parallelize_models():
+        run_model_workers(settings)
+        df_og = storage.load_aggregate_data(data_dir=settings["data_dir"])
+        if df_og is None or df_og.empty:
+            raise RuntimeError("Parallel model workers produced no aggregate data.")
+        if not settings["skip_plot"]:
+            plot(df_og)
+        return
+
+    df_og = storage.merge_and_load(data_dir=settings["data_dir"])
+    df_og = run(
+        df_og,
+        configs=settings["configs"],
+        problem_info=settings["problem_info"],
+        data_dir=settings["data_dir"],
+        result_folder_prefix=settings["result_folder_prefix"],
+    )
+    if not settings["skip_plot"]:
+        plot(df_og)
     # datastore_store(load_data(),'w')
 
 
 if __name__ == "__main__":
-    df_og = storage.merge_and_load()
-    df_og = run(df_og)
-    coco_gen()
+    settings = resolve_runtime_settings()
+    if should_parallelize_models():
+        run_model_workers(settings)
+        df_og = storage.load_aggregate_data(data_dir=settings["data_dir"])
+        if df_og is None or df_og.empty:
+            raise RuntimeError("Parallel model workers produced no aggregate data.")
+        if not settings["skip_plot"]:
+            plot(df_og)
+        if not settings["skip_coco"]:
+            coco_gen(data_dir=settings["data_dir"])
+        raise SystemExit(0)
+
+    df_og = storage.merge_and_load(data_dir=settings["data_dir"])
+    df_og = run(
+        df_og,
+        configs=settings["configs"],
+        problem_info=settings["problem_info"],
+        data_dir=settings["data_dir"],
+        result_folder_prefix=settings["result_folder_prefix"],
+    )
+    if not settings["skip_plot"]:
+        plot(df_og)
+    if not settings["skip_coco"]:
+        coco_gen(data_dir=settings["data_dir"])
