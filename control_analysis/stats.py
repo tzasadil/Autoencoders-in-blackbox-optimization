@@ -18,7 +18,15 @@ from control_analysis.constants import MODEL_DISPLAY_LABELS, PLAIN_DOE_MODEL, PR
 ALPHA = 0.05
 DEFAULT_EQUIVALENCE_DELTA = 0.5
 DEFAULT_EQUIVALENCE_SWEEP = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.55, 3.57, 3.6, 4.0]
-MODEL_ORDER = [PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL, "elm100", "fitloss", "none", "oracle", "gp", "nn3"]
+MODEL_ORDER = [
+    PRIMARY_DOE_MODEL,
+    PLAIN_DOE_MODEL,
+    "elm100",
+    "fitloss",
+    "none",
+    "gp",
+    "nn3",
+]
 MODEL_LABELS = MODEL_DISPLAY_LABELS
 
 
@@ -250,9 +258,15 @@ def write_stats_report(
     equivalence = compute_equivalence_test(comparison_df, delta=equivalence_delta)
     sweep_results = sweep_equivalence_margins(comparison_df, margins=equivalence_sweep)
     first_equivalent_margin = find_first_equivalent_margin(sweep_results)
+    available_models = set(comparison_df["model"].unique())
+    requested_pairwise_contrasts = [
+        (PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL),
+        (PRIMARY_DOE_MODEL, "fitloss"),
+    ]
     pairwise_contrasts = [
-        compute_pairwise_contrast(comparison_df, PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL),
-        compute_pairwise_contrast(comparison_df, PRIMARY_DOE_MODEL, "fitloss"),
+        compute_pairwise_contrast(comparison_df, left_model, right_model)
+        for left_model, right_model in requested_pairwise_contrasts
+        if left_model in available_models and right_model in available_models
     ]
 
     output_path = Path(output_dir)

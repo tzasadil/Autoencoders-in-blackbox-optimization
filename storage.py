@@ -34,6 +34,16 @@ def normalize_stored_path(path):
     return os.path.normpath(str(path).replace('\\', '/'))
 
 
+def ensure_storage_columns(df):
+    if df is None:
+        return None
+    df = df.copy()
+    for column in pd_cols.all_cols:
+        if column not in df.columns:
+            df[column] = np.nan
+    return df
+
+
 def store_data(df, desc='df', data_dir=None):
     if df.empty: return
     data_dir = resolve_data_dir(data_dir)
@@ -56,6 +66,7 @@ def store_data(df, desc='df', data_dir=None):
     #     stored_separately[name+'_len']= lengths
 
     
+    df = ensure_storage_columns(df)
     # df = df[stored_normally_cols] # get rid of augmentations and stored_separately cols
     df = df[pd_cols.all_cols] # get rid of augmentations and stored_separately cols
     # with pd.HDFStore(f'data/{desc}.h5','a') as data_storage:
@@ -71,11 +82,13 @@ def merge_and_load(data_dir=None):
     for npz in numpy_files:
         data = np.load(npz, allow_pickle=True)
         df = pd.DataFrame({file: data[file] for file in data.files})
+        df = ensure_storage_columns(df)
         dfs.append(df)
         data.close()
     if len(numpy_files)>0:
         del data   
     df = pd.concat(dfs, ignore_index=True) if len(dfs)>0 else None
+    df = ensure_storage_columns(df)
     if len(numpy_files)>1:
         overwrite(df, data_dir=data_dir)
     return df

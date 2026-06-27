@@ -39,6 +39,7 @@ import ranks
 import storage
 import pd_cols
 from doe2vec.doe2vec import doe_model
+from control_analysis.constants import SELECTOR_BASELINE_MODELS
 import math
 import functools
 import json
@@ -122,6 +123,8 @@ def main(df=None):
 def plot(df=None):
     if df is None:
         df = storage.load_data()
+    if df is not None and "model" in df.columns:
+        df = df[~df["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
     ranks.plot(df)
 
 
@@ -174,6 +177,30 @@ def build_oracle_model(label="oracle"):
     return models.OracleSelector(), label
 
 
+def build_selection_policy_model(selection_mode, label, n_clusters=4, seed=42):
+    return models.SelectionPolicy(
+        selection_mode=selection_mode, n_clusters=n_clusters, seed=seed
+    ), label
+
+
+def build_negative_oracle_model(label="negative_oracle"):
+    return build_selection_policy_model("negative_oracle", label=label)
+
+
+def build_cluster_random_half_model(label="cluster_random_half", n_clusters=4):
+    return build_selection_policy_model(
+        "cluster_random_half", label=label, n_clusters=n_clusters
+    )
+
+
+def build_cluster_best_half_oracle_model(
+    label="cluster_best_half_oracle", n_clusters=4
+):
+    return build_selection_policy_model(
+        "cluster_best_half_oracle", label=label, n_clusters=n_clusters
+    )
+
+
 def build_vae_model(latent_layers, train_records, label=None):
     latent_desc = "x".join(format_ratio(layer) for layer in latent_layers)
     model_name = label or f"vae_latent_{latent_desc}_inputs_{train_records}"
@@ -218,6 +245,9 @@ def default_configs(best_doe_config_path=DEFAULT_BEST_DOE_CONFIG_PATH):
     return [
         [None, 1, None, None],
         [None, 2, None, build_oracle_model()],
+        [None, 2, None, build_negative_oracle_model()],
+        [None, 2, None, build_cluster_random_half_model(n_clusters=4)],
+        [None, 2, None, build_cluster_best_half_oracle_model(n_clusters=4)],
         # [None, 2, None, build_doe_model(n_samples, latent_dim)],
         # [None, 2, None, elm(100)],
         # [None, 2, None, gp],
@@ -347,14 +377,24 @@ def single_config(
             surrogate = model_f.load_or_create(dim)
             cached_doe_functions = model_f.functions
             surrogate.executor = threadpool
-        elif isinstance(model_f, models.OracleSelector):
+        elif isinstance(model_f, models.SelectionPolicy):
             surrogate = model_f
         else:
             surrogate = models.Surrogate(model_f, dim_red_f, **surrogate_kwargs)
         observer.observe(problem)
         start_time = timer()
         pop_none = 5 * dim
-        evals, vals, spearman_corr, spearman_pval, dists = evo.optimize(
+        (
+            evals,
+            vals,
+            spearman_corr,
+            spearman_pval,
+            dists,
+            selected_spread_ratio,
+            selected_radius_ratio,
+            selection_quality_gap,
+            oracle_regret,
+        ) = evo.optimize(
             problem,
             surrogate,
             # pop_size = 4 + math.floor(3 * math.log(dim)) if pop_size == 'None' else int(pop_size) if isinstance(pop_size, int) else float(pop_size) * (4 + math.floor(3 * math.log(dim))),
@@ -392,6 +432,10 @@ def single_config(
             spearman_corr,
             spearman_pval,
             dists,
+            selected_spread_ratio,
+            selected_radius_ratio,
+            selection_quality_gap,
+            oracle_regret,
         ]
         ddff = pd.DataFrame({k: v for (k, v) in zip(pd_cols.all_cols, unzip([df_row]))})
         dsc = pd_cols.get_storage_desc(ddff)
@@ -436,7 +480,10 @@ def coco_gen():
         "fitloss": "fitloss",
         "gp": "gp",
         "nn3": "nn",
+        "negativeoracle": "negative_oracle",
         "oracle": "oracle",
+        "clusterrandomhalf": "cluster_random_half",
+        "clusterbesthalforacle": "cluster_best_half_oracle",
     }
     aliased_out_folders = []
     for folder in out_folders:

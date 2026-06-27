@@ -1,4 +1,4 @@
-all_cols = ['vals', 'evals', 'pop_size', 'gen_mult', 'model', 'dim_red', 'instance','function', 'dim', 'elapsed_time', 'coco_directory', 'timestamp', 'budget', 'note', 'spearman_corr', 'spearman_pval', 'dists'] # and 'ranks', '
+all_cols = ['vals', 'evals', 'pop_size', 'gen_mult', 'model', 'dim_red', 'instance','function', 'dim', 'elapsed_time', 'coco_directory', 'timestamp', 'budget', 'note', 'spearman_corr', 'spearman_pval', 'dists', 'selected_spread_ratio', 'selected_radius_ratio', 'selection_quality_gap', 'oracle_regret'] # and 'ranks', '
 determining_cols = ['pop_size','gen_mult', 'model', 'dim_red','budget', 'note'] # the 'run settings' that we measure the performance of  
 pure_desc_cols = ['pop_size','gen_mult','budget', 'note'] # the 'run settings' that we measure the performance of  
 

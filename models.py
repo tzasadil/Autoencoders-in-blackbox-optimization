@@ -194,16 +194,23 @@ class Surrogate:
         self.model = self.model_f(latentX,yy,self.model)
 
 
-class OracleSelector:
-    def __init__(self):
+class SelectionPolicy:
+    def __init__(self, selection_mode="oracle", n_clusters=4, seed=42):
         self.inp_size = 0
-        self.selection_mode = "oracle"
+        self.selection_mode = selection_mode
+        self.n_clusters = int(n_clusters)
+        self.seed = int(seed)
 
     def __call__(self, x):
         return np.zeros(x.shape[0])
 
     def train(self, train_x, train_y, opt=None):
         return
+
+
+class OracleSelector(SelectionPolicy):
+    def __init__(self):
+        super().__init__(selection_mode="oracle")
 
 
 if __name__ == '__main__':

@@ -28,12 +28,21 @@ def resolve_doe_models(path: Path | str = DEFAULT_BEST_DOE_CONFIG_PATH) -> tuple
 
 
 PRIMARY_DOE_MODEL, PLAIN_DOE_MODEL = resolve_doe_models()
+SELECTOR_BASELINE_MODELS = [
+    "oracle",
+    "negative_oracle",
+    "cluster_random_half",
+    "cluster_best_half_oracle",
+]
 
 MODEL_DISPLAY_LABELS = {
     PRIMARY_DOE_MODEL: "DOE",
     PLAIN_DOE_MODEL: "DOE plain",
+    "cluster_best_half_oracle": "Cluster best-half oracle",
+    "cluster_random_half": "Cluster random half",
     "elm100": "ELM",
     "fitloss": "Fitloss",
+    "negative_oracle": "Negative oracle",
     "none": "No surrogate",
     "oracle": "Oracle",
     "gp": "GP",

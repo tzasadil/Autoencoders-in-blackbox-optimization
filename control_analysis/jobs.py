@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, display_model_label
+from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, SELECTOR_BASELINE_MODELS, display_model_label
 from control_analysis.formatting import write_dataframe_tabular
 from control_analysis.models import ControlDataBundle, EvalWindowGraphSpec
 from control_analysis.plotting import bar, save_and_show, two_layer_tics
@@ -20,7 +20,15 @@ from control_analysis.transforms import add_func_group, default_groupby, improve
 
 
 _WORKER_BUNDLE: ControlDataBundle | None = None
-COMPARISON_MODELS = ["none", "oracle", "gp", "nn3", "elm100", PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, "fitloss"]
+COMPARISON_MODELS = [
+    "none",
+    "gp",
+    "nn3",
+    "elm100",
+    PLAIN_DOE_MODEL,
+    PRIMARY_DOE_MODEL,
+    "fitloss",
+]
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
 
 
@@ -60,6 +68,7 @@ def _plot_metric_bar(
 
 def _plot_generation_progress(
     summary: pd.DataFrame,
+    value_column: str,
     title: str,
     ylabel: str,
     output_name: str,
@@ -68,7 +77,7 @@ def _plot_generation_progress(
     if summary.empty:
         return None
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(summary["generation_fraction"], summary["avg_spearman_corr"], color="forestgreen", linewidth=2)
+    ax.plot(summary["generation_fraction"], summary[value_column], color="forestgreen", linewidth=2)
     ax.set_title(title)
     ax.set_xlabel("Fraction of generations")
     ax.set_ylabel(ylabel)
@@ -82,6 +91,22 @@ def _build_problem_metric_summary(df_og: pd.DataFrame) -> pd.DataFrame:
     analysis_df["avg_rank"] = analysis_df["ranks"].apply(np.mean)
     analysis_df["avg_spearman_corr"] = analysis_df["spearman_corr"].apply(_nanmean_array)
     analysis_df["avg_spearman_pval"] = analysis_df["spearman_pval"].apply(_nanmean_array)
+    if "selected_spread_ratio" in analysis_df.columns:
+        analysis_df["avg_selected_spread_ratio"] = analysis_df["selected_spread_ratio"].apply(_nanmean_array)
+    else:
+        analysis_df["avg_selected_spread_ratio"] = np.nan
+    if "selected_radius_ratio" in analysis_df.columns:
+        analysis_df["avg_selected_radius_ratio"] = analysis_df["selected_radius_ratio"].apply(_nanmean_array)
+    else:
+        analysis_df["avg_selected_radius_ratio"] = np.nan
+    if "selection_quality_gap" in analysis_df.columns:
+        analysis_df["avg_selection_quality_gap"] = analysis_df["selection_quality_gap"].apply(_nanmean_array)
+    else:
+        analysis_df["avg_selection_quality_gap"] = np.nan
+    if "oracle_regret" in analysis_df.columns:
+        analysis_df["avg_oracle_regret"] = analysis_df["oracle_regret"].apply(_nanmean_array)
+    else:
+        analysis_df["avg_oracle_regret"] = np.nan
 
     return analysis_df.groupby(
         ["func_group", "func_group_key", "function", "instance", "dim", "model", "true_ratio"],
@@ -90,25 +115,33 @@ def _build_problem_metric_summary(df_og: pd.DataFrame) -> pd.DataFrame:
         avg_rank=("avg_rank", "mean"),
         avg_spearman_corr=("avg_spearman_corr", "mean"),
         avg_spearman_pval=("avg_spearman_pval", "mean"),
+        avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
+        avg_selected_radius_ratio=("avg_selected_radius_ratio", "mean"),
+        avg_selection_quality_gap=("avg_selection_quality_gap", "mean"),
+        avg_oracle_regret=("avg_oracle_regret", "mean"),
         elapsed_time=("elapsed_time", "sum"),
     )
 
 
-def _build_generation_fraction_summary(df_og: pd.DataFrame) -> pd.DataFrame:
+def _build_generation_fraction_summary(df_og: pd.DataFrame, array_column: str, value_column: str) -> pd.DataFrame:
     doe_rows = df_og[df_og["model"] == PRIMARY_DOE_MODEL]
-    if doe_rows.empty:
-        return pd.DataFrame(columns=["generation_fraction", "avg_spearman_corr"])
+    if doe_rows.empty or array_column not in doe_rows.columns:
+        return pd.DataFrame(columns=["generation_fraction", value_column])
 
-    arrays = doe_rows["spearman_corr"].map(lambda values: np.asarray(values, dtype=float)).tolist()
+    arrays = []
+    for values in doe_rows[array_column].tolist():
+        array = np.asarray(values, dtype=float)
+        if array.ndim == 1 and array.size > 0:
+            arrays.append(array)
     if not arrays:
-        return pd.DataFrame(columns=["generation_fraction", "avg_spearman_corr"])
+        return pd.DataFrame(columns=["generation_fraction", value_column])
 
     stacked = np.vstack(arrays)
     num_generations = stacked.shape[1]
     return pd.DataFrame(
         {
             "generation_fraction": np.arange(1, num_generations + 1, dtype=float) / num_generations,
-            "avg_spearman_corr": np.nanmean(stacked, axis=0),
+            value_column: np.nanmean(stacked, axis=0),
         }
     )
 
@@ -162,23 +195,48 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     ordered_groups = [label for _, _, _, label in FUNC_GROUP_LABELS]
     doe_by_func_group = (
         doe_summary.groupby(["func_group", "func_group_key"], as_index=False)
-        .agg(avg_rank=("avg_rank", "mean"), avg_spearman_corr=("avg_spearman_corr", "mean"))
+        .agg(
+            avg_rank=("avg_rank", "mean"),
+            avg_spearman_corr=("avg_spearman_corr", "mean"),
+            avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
+            avg_selected_radius_ratio=("avg_selected_radius_ratio", "mean"),
+            avg_selection_quality_gap=("avg_selection_quality_gap", "mean"),
+            avg_oracle_regret=("avg_oracle_regret", "mean"),
+        )
         .set_index("func_group")
-        .loc[ordered_groups]
+        .reindex(ordered_groups)
+        .dropna(how="all")
     )
     doe_by_dim = (
         doe_summary.groupby("dim", as_index=False)
-        .agg(avg_rank=("avg_rank", "mean"), avg_spearman_corr=("avg_spearman_corr", "mean"))
+        .agg(
+            avg_rank=("avg_rank", "mean"),
+            avg_spearman_corr=("avg_spearman_corr", "mean"),
+            avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
+            avg_selected_radius_ratio=("avg_selected_radius_ratio", "mean"),
+            avg_selection_quality_gap=("avg_selection_quality_gap", "mean"),
+            avg_oracle_regret=("avg_oracle_regret", "mean"),
+        )
         .sort_values("dim")
         .set_index("dim")
     )
-    doe_by_fraction = _build_generation_fraction_summary(df_og)
+    doe_spearman_by_fraction = _build_generation_fraction_summary(df_og, "spearman_corr", "avg_spearman_corr")
+    doe_spread_ratio_by_fraction = _build_generation_fraction_summary(df_og, "selected_spread_ratio", "avg_selected_spread_ratio")
+    doe_radius_ratio_by_fraction = _build_generation_fraction_summary(df_og, "selected_radius_ratio", "avg_selected_radius_ratio")
+    doe_quality_gap_by_fraction = _build_generation_fraction_summary(df_og, "selection_quality_gap", "avg_selection_quality_gap")
+    doe_oracle_regret_by_fraction = _build_generation_fraction_summary(df_og, "oracle_regret", "avg_oracle_regret")
 
     bar_specs = [
         (doe_by_func_group, "avg_rank", "DOE average rank by function group", "Average rank percentile", "doe_avg_rank_by_func_group"),
         (doe_by_dim, "avg_rank", "DOE average rank by dimension", "Average rank percentile", "doe_avg_rank_by_dim"),
         (doe_by_func_group, "avg_spearman_corr", "DOE surrogate correlation by function group", "Average Spearman correlation", "doe_spearman_by_func_group"),
         (doe_by_dim, "avg_spearman_corr", "DOE surrogate correlation by dimension", "Average Spearman correlation", "doe_spearman_by_dim"),
+        (doe_by_func_group, "avg_selected_spread_ratio", "DOE selected-set spread ratio by function group", "Selected/all pairwise spread", "doe_selected_spread_ratio_by_func_group"),
+        (doe_by_dim, "avg_selected_spread_ratio", "DOE selected-set spread ratio by dimension", "Selected/all pairwise spread", "doe_selected_spread_ratio_by_dim"),
+        (doe_by_func_group, "avg_selected_radius_ratio", "DOE selected-set radius ratio by function group", "Selected/all mean radius", "doe_selected_radius_ratio_by_func_group"),
+        (doe_by_dim, "avg_selected_radius_ratio", "DOE selected-set radius ratio by dimension", "Selected/all mean radius", "doe_selected_radius_ratio_by_dim"),
+        (doe_by_func_group, "avg_oracle_regret", "DOE oracle regret by function group", "Mean regret vs oracle top-k", "doe_oracle_regret_by_func_group"),
+        (doe_by_dim, "avg_oracle_regret", "DOE oracle regret by dimension", "Mean regret vs oracle top-k", "doe_oracle_regret_by_dim"),
     ]
 
     for summary, value_column, title, ylabel, output_name in bar_specs:
@@ -187,7 +245,8 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
             paths[output_name] = path
 
     generation_path = _plot_generation_progress(
-        doe_by_fraction,
+        doe_spearman_by_fraction,
+        value_column="avg_spearman_corr",
         title="DOE surrogate correlation by generation progress",
         ylabel="Average Spearman correlation",
         output_name="doe_spearman_by_generation_fraction",
@@ -196,7 +255,44 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     if generation_path is not None:
         paths["doe_spearman_by_generation_fraction"] = generation_path
 
+    generation_specs = [
+        (doe_spread_ratio_by_fraction, "avg_selected_spread_ratio", "DOE selected-set spread ratio by generation progress", "Selected/all pairwise spread", "doe_selected_spread_ratio_by_generation_fraction"),
+        (doe_radius_ratio_by_fraction, "avg_selected_radius_ratio", "DOE selected-set radius ratio by generation progress", "Selected/all mean radius", "doe_selected_radius_ratio_by_generation_fraction"),
+        (doe_quality_gap_by_fraction, "avg_selection_quality_gap", "DOE selection quality gap by generation progress", "Rejected mean - selected mean", "doe_selection_quality_gap_by_generation_fraction"),
+        (doe_oracle_regret_by_fraction, "avg_oracle_regret", "DOE oracle regret by generation progress", "Mean regret vs oracle top-k", "doe_oracle_regret_by_generation_fraction"),
+    ]
+    for summary, value_column, title, ylabel, output_name in generation_specs:
+        path = _plot_generation_progress(
+            summary,
+            value_column=value_column,
+            title=title,
+            ylabel=ylabel,
+            output_name=output_name,
+            output_dir=output_dir,
+        )
+        if path is not None:
+            paths[output_name] = path
+
     return paths
+
+
+def _render_selector_baseline_graph(df_og: pd.DataFrame, output_dir: str | os.PathLike[str]) -> Path | None:
+    selector_df = df_og[df_og["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
+    if selector_df.empty:
+        return None
+    if "avg_rank" not in selector_df.columns:
+        selector_df["avg_rank"] = selector_df["ranks"].apply(np.mean)
+    summary = selector_df.groupby("model", as_index=False).agg(avg_rank=("avg_rank", "mean"))
+    order = _ordered_labels(summary["model"].tolist(), SELECTOR_BASELINE_MODELS)
+    summary = summary.set_index("model").loc[order]
+    return _plot_metric_bar(
+        summary,
+        value_column="avg_rank",
+        title="Selector baseline comparison, all dims average",
+        ylabel="Average rank percentile",
+        output_name="selector_baseline_avg_rank_all_dims",
+        output_dir=output_dir,
+    )
 
 
 def _render_runtime_graph(df_og: pd.DataFrame, output_dir: str | os.PathLike[str]) -> Path | None:
@@ -317,6 +413,7 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
 
     model_breakdown_paths = _render_model_breakdown_graphs(per_problem_metrics, output_dir=output_path)
     doe_focus_paths = _render_doe_focus_graphs(per_problem_metrics, analysis_df, output_dir=output_path)
+    selector_baseline_path = _render_selector_baseline_graph(analysis_df, output_dir=output_path)
     runtime_path = _render_runtime_graph(analysis_df, output_dir=output_path)
 
     result: dict[str, Path | pd.DataFrame] = {
@@ -328,6 +425,8 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     }
     result.update({key: value for key, value in model_breakdown_paths.items()})
     result.update({key: value for key, value in doe_focus_paths.items()})
+    if selector_baseline_path is not None:
+        result["selector_baseline_avg_rank_all_dims"] = selector_baseline_path
     if runtime_path is not None:
         result["total_runtime_by_model"] = runtime_path
     return result
@@ -344,6 +443,7 @@ def _build_eval_window_graph_specs() -> list[EvalWindowGraphSpec]:
 
 def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpec, output_dir: str | os.PathLike[str] = "graphs") -> Path | None:
     df = bundle.df_og.copy()
+    df = df[~df["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
     title_parts = []
     eval_limit = 999
     if spec.description:
@@ -487,6 +587,7 @@ def plot_elapsed_time_by_dim_red_kind(bundle: ControlDataBundle, output_dir: str
 def plot_model_comparison(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
     df = bundle.df_og.copy()
     df = df[(df["dim_red_kind"] == "none") & (df["pop_size"] == 48) & (df["true_ratio"].map(Fraction) == Fraction(1, 8))]
+    df = df[~df["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
     ax = bar(df, "model", index_mapper=display_model_label)
     two_layer_tics(ax)
     return save_and_show("model_comparison", show=False, output_dir=output_dir)
