@@ -176,7 +176,7 @@ class doe_model:
         preserve_input_order=True,
         drop_duplicate_points=True,
         point_selection="local_diverse",
-        transform_maxfev=15,
+        transform_maxfev=40,
         translation_bound=0.2,
         use_transform_fitting=True,
         selector_mode="latent",
@@ -194,7 +194,7 @@ class doe_model:
             preserve_input_order (bool, optional): Reorder local DOE points to stay aligned with the previous round.
             drop_duplicate_points (bool, optional): Remove repeated x locations before building the local DOE.
             point_selection (str, optional): Local point selection strategy, either "local_diverse" or "local_nearest".
-            transform_maxfev (int, optional): Function-evaluation budget for the local transform fit of each bank function.
+            transform_maxfev (int, optional): Function-evaluation budget for the local transform fit of each bank function. Defaults to 40.
             translation_bound (float, optional): Per-coordinate bound for the fitted translation in normalized coordinates.
             use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
             selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".

@@ -716,33 +716,9 @@ def execute_optimization():
             raise RuntimeError("Parallel model workers produced no aggregate data.")
         if not settings["skip_plot"]:
             plot(df_og)
-        return
-
-    df_og = storage.merge_and_load(data_dir=settings["data_dir"])
-    df_og = run(
-        df_og,
-        configs=settings["configs"],
-        problem_info=settings["problem_info"],
-        data_dir=settings["data_dir"],
-        result_folder_prefix=settings["result_folder_prefix"],
-    )
-    if not settings["skip_plot"]:
-        plot(df_og)
-    # datastore_store(load_data(),'w')
-
-
-if __name__ == "__main__":
-    settings = resolve_runtime_settings()
-    if should_parallelize_models():
-        run_model_workers(settings)
-        df_og = storage.load_aggregate_data(data_dir=settings["data_dir"])
-        if df_og is None or df_og.empty:
-            raise RuntimeError("Parallel model workers produced no aggregate data.")
-        if not settings["skip_plot"]:
-            plot(df_og)
         if not settings["skip_coco"]:
             coco_gen(data_dir=settings["data_dir"])
-        raise SystemExit(0)
+        return
 
     df_og = storage.merge_and_load(data_dir=settings["data_dir"])
     df_og = run(
@@ -756,3 +732,8 @@ if __name__ == "__main__":
         plot(df_og)
     if not settings["skip_coco"]:
         coco_gen(data_dir=settings["data_dir"])
+
+
+if __name__ == "__main__":
+    execute_optimization()
+    raise SystemExit(0)
