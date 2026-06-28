@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-
 import pandas as pd
-
 from control_analysis.constants import TABLE_DEFAULT_COLUMN_FORMAT
 
 
@@ -22,7 +20,9 @@ def latex_tabular(series: pd.Series) -> str:
     return "\n".join(table)
 
 
-def write_latex_table(series: pd.Series, output_path: str | os.PathLike[str], heading: str | None = None) -> Path:
+def write_latex_table(
+    series: pd.Series, output_path: str | os.PathLike[str], heading: str | None = None
+) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -33,7 +33,11 @@ def write_latex_table(series: pd.Series, output_path: str | os.PathLike[str], he
     return path
 
 
-def print_latex(series: pd.Series, output_path: str | os.PathLike[str] | None = None, heading: str | None = None) -> None:
+def print_latex(
+    series: pd.Series,
+    output_path: str | os.PathLike[str] | None = None,
+    heading: str | None = None,
+) -> None:
     table = latex_tabular(series)
     if output_path is None:
         print(table)
@@ -41,8 +45,15 @@ def print_latex(series: pd.Series, output_path: str | os.PathLike[str] | None = 
     write_latex_table(series, output_path=output_path, heading=heading)
 
 
-def write_dataframe_tabular(df: pd.DataFrame, output_path: Path, column_format: str) -> Path:
+def write_dataframe_tabular(
+    df: pd.DataFrame, output_path: Path, column_format: str
+) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    latex = df.to_latex(index=False, escape=False, float_format=lambda value: f"{value:0.2f}", column_format=column_format)
+    latex = df.to_latex(
+        index=False,
+        escape=False,
+        float_format=lambda value: f"{value:0.2f}",
+        column_format=column_format,
+    )
     output_path.write_text("\n".join(latex.splitlines()) + "\n", encoding="utf-8")
     return output_path
