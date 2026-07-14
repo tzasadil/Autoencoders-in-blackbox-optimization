@@ -28,6 +28,7 @@ MODEL_ORDER = [
     "nn3",
 ]
 MODEL_LABELS = MODEL_DISPLAY_LABELS
+RANK_METRIC = "last_rank"
 
 
 def auc(df: pd.DataFrame) -> pd.Series:
@@ -38,7 +39,7 @@ def auc(df: pd.DataFrame) -> pd.Series:
 
 
 def equivalence(df: pd.DataFrame, left_model: str = PRIMARY_DOE_MODEL, right_model: str = "none", delta: float = 0.5) -> dict[str, float]:
-    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values=RANK_METRIC)
     left = wide[left_model].to_numpy()
     right = wide[right_model].to_numpy()
     p_value, _, _ = ttost_paired(left, right, low=-delta, upp=delta)
@@ -46,7 +47,7 @@ def equivalence(df: pd.DataFrame, left_model: str = PRIMARY_DOE_MODEL, right_mod
 
 
 def stat_tests(df: pd.DataFrame, descriptor: str = "") -> dict[str, object]:
-    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values=RANK_METRIC)
     algo_columns = list(wide.columns)
     friedman = scipy_stats.friedmanchisquare(*[wide[column].to_numpy() for column in algo_columns])
     posthoc = sp.posthoc_nemenyi_friedman(wide.to_numpy())
@@ -64,13 +65,13 @@ def prepare_model_kind_comparison(df: pd.DataFrame) -> pd.DataFrame:
     grouped = (
         df[df["model"].isin(MODEL_ORDER)]
         .groupby(["function", "instance", "dim", "model"], as_index=False)
-        .agg(avg_rank=("avg_rank", "mean"))
+        .agg(last_rank=("last_rank", "mean"))
     )
     return grouped
 
 
 def compute_significance_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, float, float, float, int]:
-    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values=RANK_METRIC)
     ordered_columns = [column for column in MODEL_ORDER if column in wide.columns]
     wide = wide[ordered_columns].dropna()
     if len(wide.columns) < 2:
@@ -108,7 +109,7 @@ def compute_equivalence_test(
     left_model: str = PRIMARY_DOE_MODEL,
     right_model: str = "none",
 ) -> dict[str, float | int | bool | tuple[float, float]]:
-    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values=RANK_METRIC)
     wide = wide[[column for column in MODEL_ORDER if column in wide.columns]].dropna()
     if left_model not in wide.columns or right_model not in wide.columns:
         raise RuntimeError(f"Missing model columns for equivalence test: {left_model}, {right_model}")
@@ -166,7 +167,7 @@ def compute_pairwise_contrast(
     right_model: str,
     alpha: float = ALPHA,
 ) -> dict[str, object]:
-    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values="avg_rank")
+    wide = df.pivot_table(index=["function", "instance", "dim"], columns="model", values=RANK_METRIC)
     wide = wide[[column for column in MODEL_ORDER if column in wide.columns]].dropna()
     left = wide[left_model].to_numpy()
     right = wide[right_model].to_numpy()

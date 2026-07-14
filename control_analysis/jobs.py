@@ -12,6 +12,11 @@ import pandas as pd
 import seaborn as sns
 
 from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, SELECTOR_BASELINE_MODELS, display_model_label
+try:
+    from control_analysis.oracle_table import load_selector_baseline_ranks
+except ModuleNotFoundError:
+    def load_selector_baseline_ranks() -> pd.DataFrame | None:
+        return None
 from control_analysis.formatting import write_dataframe_tabular
 from control_analysis.models import ControlDataBundle, EvalWindowGraphSpec
 from control_analysis.plotting import bar, save_and_show, two_layer_tics
@@ -30,6 +35,10 @@ COMPARISON_MODELS = [
     "fitloss",
 ]
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
+RANK_METRIC = "final_rank"
+RANK_SOURCE = "last_rank"
+RANK_LABEL = "Final rank percentile"
+RANK_TITLE = "Final rank"
 
 
 def _nanmean_array(values: np.ndarray | list[float]) -> float:
@@ -88,7 +97,7 @@ def _plot_generation_progress(
 
 def _build_problem_metric_summary(df_og: pd.DataFrame) -> pd.DataFrame:
     analysis_df = add_func_group(df_og)
-    analysis_df["avg_rank"] = analysis_df["ranks"].apply(np.mean)
+    analysis_df[RANK_METRIC] = analysis_df["ranks"].apply(lambda values: values[-1])
     analysis_df["avg_spearman_corr"] = analysis_df["spearman_corr"].apply(_nanmean_array)
     analysis_df["avg_spearman_pval"] = analysis_df["spearman_pval"].apply(_nanmean_array)
     if "selected_spread_ratio" in analysis_df.columns:
@@ -112,7 +121,7 @@ def _build_problem_metric_summary(df_og: pd.DataFrame) -> pd.DataFrame:
         ["func_group", "func_group_key", "function", "instance", "dim", "model", "true_ratio"],
         as_index=False,
     ).agg(
-        avg_rank=("avg_rank", "mean"),
+        final_rank=(RANK_METRIC, "mean"),
         avg_spearman_corr=("avg_spearman_corr", "mean"),
         avg_spearman_pval=("avg_spearman_pval", "mean"),
         avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
@@ -151,19 +160,19 @@ def _render_model_breakdown_graphs(per_problem: pd.DataFrame, output_dir: str | 
     metric_specs = [
         ("avg_spearman_corr", "surr_correlation", "Average Spearman correlation", "Surrogate correlation", True),
         ("avg_spearman_pval", "surr_pval", "Average Spearman p-value", "Surrogate p-value", True),
-        ("avg_rank", "avg_rank", "Average rank percentile", "Average rank", False),
+        (RANK_METRIC, "avg_rank", RANK_LABEL, RANK_TITLE, False),
     ]
 
     for dim in [2, 5, 10, None]:
         dim_label = "all_dims" if dim is None else f"dim_{dim}"
-        title_suffix = "all dims average" if dim is None else f"dim={dim}"
+        title_suffix = "all dims" if dim is None else f"dim={dim}"
         filtered = per_problem if dim is None else per_problem[per_problem["dim"] == dim]
         if filtered.empty:
             continue
         model_summary = filtered.groupby("model", as_index=False).agg(
             avg_spearman_corr=("avg_spearman_corr", "mean"),
             avg_spearman_pval=("avg_spearman_pval", "mean"),
-            avg_rank=("avg_rank", "mean"),
+            final_rank=(RANK_METRIC, "mean"),
         )
         order = _ordered_labels(model_summary["model"].tolist(), _MODEL_DISPLAY_ORDER)
         model_summary = model_summary.set_index("model").loc[order]
@@ -196,7 +205,7 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     doe_by_func_group = (
         doe_summary.groupby(["func_group", "func_group_key"], as_index=False)
         .agg(
-            avg_rank=("avg_rank", "mean"),
+            final_rank=(RANK_METRIC, "mean"),
             avg_spearman_corr=("avg_spearman_corr", "mean"),
             avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
             avg_selected_radius_ratio=("avg_selected_radius_ratio", "mean"),
@@ -210,7 +219,7 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     doe_by_dim = (
         doe_summary.groupby("dim", as_index=False)
         .agg(
-            avg_rank=("avg_rank", "mean"),
+            final_rank=(RANK_METRIC, "mean"),
             avg_spearman_corr=("avg_spearman_corr", "mean"),
             avg_selected_spread_ratio=("avg_selected_spread_ratio", "mean"),
             avg_selected_radius_ratio=("avg_selected_radius_ratio", "mean"),
@@ -227,8 +236,8 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     doe_oracle_regret_by_fraction = _build_generation_fraction_summary(df_og, "oracle_regret", "avg_oracle_regret")
 
     bar_specs = [
-        (doe_by_func_group, "avg_rank", "DOE average rank by function group", "Average rank percentile", "doe_avg_rank_by_func_group"),
-        (doe_by_dim, "avg_rank", "DOE average rank by dimension", "Average rank percentile", "doe_avg_rank_by_dim"),
+        (doe_by_func_group, RANK_METRIC, "DOE final rank by function group", RANK_LABEL, "doe_avg_rank_by_func_group"),
+        (doe_by_dim, RANK_METRIC, "DOE final rank by dimension", RANK_LABEL, "doe_avg_rank_by_dim"),
         (doe_by_func_group, "avg_spearman_corr", "DOE surrogate correlation by function group", "Average Spearman correlation", "doe_spearman_by_func_group"),
         (doe_by_dim, "avg_spearman_corr", "DOE surrogate correlation by dimension", "Average Spearman correlation", "doe_spearman_by_dim"),
         (doe_by_func_group, "avg_selected_spread_ratio", "DOE selected-set spread ratio by function group", "Selected/all pairwise spread", "doe_selected_spread_ratio_by_func_group"),
@@ -279,17 +288,22 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
 def _render_selector_baseline_graph(df_og: pd.DataFrame, output_dir: str | os.PathLike[str]) -> Path | None:
     selector_df = df_og[df_og["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
     if selector_df.empty:
-        return None
-    if "avg_rank" not in selector_df.columns:
-        selector_df["avg_rank"] = selector_df["ranks"].apply(np.mean)
-    summary = selector_df.groupby("model", as_index=False).agg(avg_rank=("avg_rank", "mean"))
-    order = _ordered_labels(summary["model"].tolist(), SELECTOR_BASELINE_MODELS)
-    summary = summary.set_index("model").loc[order]
+        summary = load_selector_baseline_ranks()
+        if summary is None:
+            return None
+        summary = summary.rename(index=display_model_label)
+    else:
+        if RANK_SOURCE not in selector_df.columns:
+            selector_df[RANK_SOURCE] = selector_df["ranks"].apply(lambda values: values[-1])
+        summary = selector_df.groupby("model", as_index=False).agg(final_rank=(RANK_SOURCE, "mean"))
+        order = _ordered_labels(summary["model"].tolist(), SELECTOR_BASELINE_MODELS)
+        summary = summary.set_index("model").loc[order]
+        summary = summary.rename(index=display_model_label)
     return _plot_metric_bar(
         summary,
-        value_column="avg_rank",
-        title="Selector baseline comparison, all dims average",
-        ylabel="Average rank percentile",
+        value_column=RANK_METRIC,
+        title="Selector baseline comparison, all dims",
+        ylabel=RANK_LABEL,
         output_name="selector_baseline_avg_rank_all_dims",
         output_dir=output_dir,
     )
@@ -316,45 +330,47 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     output_path.mkdir(parents=True, exist_ok=True)
     analysis_df = add_func_group(df_og)
     analysis_df = analysis_df[analysis_df["model"].isin(COMPARISON_MODELS)].copy()
-    analysis_df["avg_rank"] = analysis_df["ranks"].apply(np.mean)
+    analysis_df[RANK_METRIC] = analysis_df["ranks"].apply(lambda values: values[-1])
     per_problem_metrics = _build_problem_metric_summary(analysis_df)
 
     per_problem = analysis_df.groupby(
         ["func_group", "func_group_key", "dim", "function", "instance", "model"],
         as_index=False,
-    ).agg(avg_rank=("avg_rank", "mean"))
+    ).agg(final_rank=(RANK_METRIC, "mean"))
 
     group_summary = per_problem.groupby(["func_group", "func_group_key", "dim", "model"], as_index=False).agg(
-        avg_rank=("avg_rank", "mean"),
-        problems=("avg_rank", "size"),
+        final_rank=("final_rank", "mean"),
+        problems=("final_rank", "size"),
     )
 
-    doe_summary = group_summary[group_summary["model"] == PRIMARY_DOE_MODEL].rename(columns={"avg_rank": "doe_avg_rank"})
-    baseline_summary = group_summary[group_summary["model"] == "none"].rename(columns={"avg_rank": "baseline_avg_rank"})
+    doe_summary = group_summary[group_summary["model"] == PRIMARY_DOE_MODEL].rename(columns={"final_rank": "doe_final_rank"})
+    baseline_summary = group_summary[group_summary["model"] == "none"].rename(columns={"final_rank": "baseline_final_rank"})
     peer_summary = (
         group_summary[group_summary["model"] != PRIMARY_DOE_MODEL]
         .groupby(["func_group", "func_group_key", "dim"], as_index=False)
-        .agg(peer_avg_rank=("avg_rank", "mean"), best_non_doe_avg_rank=("avg_rank", "min"))
+        .agg(peer_final_rank=("final_rank", "mean"), best_non_doe_final_rank=("final_rank", "min"))
     )
 
     doe_group_eval = doe_summary.merge(
-        baseline_summary[["func_group", "dim", "baseline_avg_rank"]],
+        baseline_summary[["func_group", "dim", "baseline_final_rank"]],
         on=["func_group", "dim"],
         how="left",
     ).merge(peer_summary, on=["func_group", "func_group_key", "dim"], how="left")
 
     rank_within_group = group_summary.copy()
-    rank_within_group["model_rank"] = rank_within_group.groupby(["func_group", "dim"])["avg_rank"].rank(method="dense")
+    rank_within_group["model_rank"] = rank_within_group.groupby(["func_group", "dim"])["final_rank"].rank(
+        method="dense", ascending=False
+    )
     doe_rank = rank_within_group[rank_within_group["model"] == PRIMARY_DOE_MODEL][["func_group", "dim", "model_rank"]]
     doe_group_eval = doe_group_eval.merge(doe_rank, on=["func_group", "dim"], how="left")
 
-    doe_group_eval["vs_baseline"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["baseline_avg_rank"]
-    doe_group_eval["vs_peer_mean"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["peer_avg_rank"]
-    doe_group_eval["vs_best_non_doe"] = doe_group_eval["doe_avg_rank"] - doe_group_eval["best_non_doe_avg_rank"]
+    doe_group_eval["vs_baseline"] = doe_group_eval["doe_final_rank"] - doe_group_eval["baseline_final_rank"]
+    doe_group_eval["vs_peer_mean"] = doe_group_eval["doe_final_rank"] - doe_group_eval["peer_final_rank"]
+    doe_group_eval["vs_best_non_doe"] = doe_group_eval["doe_final_rank"] - doe_group_eval["best_non_doe_final_rank"]
     doe_group_eval = doe_group_eval.sort_values(["dim", "func_group_key"])
 
     doe_by_dim = doe_group_eval.groupby("dim", as_index=False).agg(
-        doe_avg_rank=("doe_avg_rank", "mean"),
+        doe_final_rank=("doe_final_rank", "mean"),
         vs_baseline=("vs_baseline", "mean"),
         vs_peer_mean=("vs_peer_mean", "mean"),
         vs_best_non_doe=("vs_best_non_doe", "mean"),
@@ -362,7 +378,7 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     ).sort_values("dim")
 
     doe_by_func_group = doe_group_eval.groupby(["func_group", "func_group_key"], as_index=False).agg(
-        doe_avg_rank=("doe_avg_rank", "mean"),
+        doe_final_rank=("doe_final_rank", "mean"),
         vs_baseline=("vs_baseline", "mean"),
         vs_peer_mean=("vs_peer_mean", "mean"),
         vs_best_non_doe=("vs_best_non_doe", "mean"),
@@ -370,11 +386,11 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     ).sort_values("func_group_key")
 
     doe_by_dim_export = doe_by_dim.rename(
-        columns={"dim": "Dimension", "doe_avg_rank": "DOE avg. rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
-    )[["Dimension", "DOE avg. rank", "DOE - baseline", "DOE rank"]]
+        columns={"dim": "Dimension", "doe_final_rank": "DOE final rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
+    )[["Dimension", "DOE final rank", "DOE - baseline", "DOE rank"]]
     doe_by_func_group_export = doe_by_func_group.rename(
-        columns={"func_group": "Function group", "doe_avg_rank": "DOE avg. rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
-    )[["Function group", "DOE avg. rank", "DOE - baseline", "DOE rank"]]
+        columns={"func_group": "Function group", "doe_final_rank": "DOE final rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
+    )[["Function group", "DOE final rank", "DOE - baseline", "DOE rank"]]
 
     dim_table_path = write_dataframe_tabular(doe_by_dim_export, output_path / "doe_by_dim_summary.tex", "rccc")
     group_table_path = write_dataframe_tabular(doe_by_func_group_export, output_path / "doe_by_func_group_summary.tex", "lccc")
@@ -413,7 +429,7 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
 
     model_breakdown_paths = _render_model_breakdown_graphs(per_problem_metrics, output_dir=output_path)
     doe_focus_paths = _render_doe_focus_graphs(per_problem_metrics, analysis_df, output_dir=output_path)
-    selector_baseline_path = _render_selector_baseline_graph(analysis_df, output_dir=output_path)
+    selector_baseline_path = _render_selector_baseline_graph(df_og, output_dir=output_path)
     runtime_path = _render_runtime_graph(analysis_df, output_dir=output_path)
 
     result: dict[str, Path | pd.DataFrame] = {
@@ -445,7 +461,7 @@ def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpe
     df = bundle.df_og.copy()
     df = df[~df["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
     title_parts = []
-    eval_limit = 999
+    eval_limit_factor = 250.0
     if spec.description:
         title_parts.append(spec.description)
         df = df[(df["function"] >= spec.func_start) & (df["function"] <= spec.func_end)]
@@ -456,7 +472,7 @@ def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpe
         title_parts.append("all dims")
     if spec.frac_eval_limit != 1:
         title_parts.append(f"first 1/{spec.frac_eval_limit} evaluations")
-        eval_limit = int(250 / spec.frac_eval_limit)
+        eval_limit_factor = 250.0 / spec.frac_eval_limit
     if df.empty:
         return None
 
@@ -466,19 +482,19 @@ def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpe
 
     df["improvement_percent"] = df["vals"].apply(improvement_percent)
     df["convergence_cutoff"] = df["improvement_percent"].apply(lambda values: int(np.argmax(values > 99.99)) if len(values) else 0)
-    df["reduced_len"] = df.apply(lambda row: int((row["evals"] <= eval_limit).astype(int).sum()), axis=1)
-    df["rank_len"] = df.apply(lambda row: int((row["rank_evals"] <= eval_limit).astype(int).sum()), axis=1)
+    df["eval_limit"] = df["dim"].map(lambda dim: int(dim * eval_limit_factor))
+    df["reduced_len"] = df.apply(lambda row: int((row["evals"] <= row["eval_limit"]).astype(int).sum()), axis=1)
+    df["rank_len"] = df.apply(lambda row: int((row["rank_evals"] <= row["eval_limit"]).astype(int).sum()), axis=1)
     df["evals"] = df.apply(lambda row: row["evals"][: row["reduced_len"]], axis=1)
     df["vals"] = df.apply(lambda row: row["vals"][: row["reduced_len"]], axis=1)
     df["ranks"] = df.apply(lambda row: row["ranks"][: row["rank_len"]], axis=1)
-    df["avg_rank"] = df.apply(lambda row: row["ranks"].mean(), axis=1)
+    df = df[df["rank_len"] > 0].copy()
     df["last_rank"] = df.apply(lambda row: row["ranks"][-1], axis=1)
     df["rank_evals"] = df.apply(lambda row: row["rank_evals"][: row["rank_len"]], axis=1)
     if df.empty:
         return None
 
     grouped = df.groupby("model").agg({
-        "avg_rank": "mean",
         "last_rank": "mean",
         "elapsed_time": "mean",
         "model": "first",
@@ -486,8 +502,9 @@ def render_eval_window_graph(bundle: ControlDataBundle, spec: EvalWindowGraphSpe
         "surrogate": "first",
         "gen_mult": "first",
     })
-    ax = bar(grouped, y_name="avg_rank", print_table=title, table_path=table_path, baselines=bundle.baselines, index_mapper=display_model_label)
+    ax = bar(grouped, y_name="last_rank", print_table=title, table_path=table_path, baselines=bundle.baselines, index_mapper=display_model_label)
     ax.set_title(title)
+    ax.set_ylabel(RANK_LABEL)
     return save_and_show(graph_name, show=False, output_dir=output_dir)
 
 

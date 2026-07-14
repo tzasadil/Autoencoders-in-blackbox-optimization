@@ -23,7 +23,7 @@ def build_sweep_configs():
     configs = []
     for n_samples in DOE_SAMPLE_VARIANTS:
         for latent_dim in DOE_LATENT_VARIANTS:
-            configs.append([None, 4, None, main.build_doe_model(n_samples, latent_dim)])
+            configs.append([None, 2, None, main.build_doe_model(n_samples, latent_dim)])
     return configs
 
 

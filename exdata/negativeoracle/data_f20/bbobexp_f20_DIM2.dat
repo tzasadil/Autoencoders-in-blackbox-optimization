@@ -1,0 +1,39 @@
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-5.465000000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +7.422356741e+03 +6.875856741e+03 +6.875856741e+03 +5.9671e-01 -3.8264e-02
+2 0 +3.063524971e+00 -5.434364750e+02 -5.434364750e+02 +7.4769e-01 +1.6230e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (1.000000000000e+03) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +7.422356741e+03 +8.422356741e+03 +8.422356741e+03 +5.9671e-01 -3.8264e-02
+2 0 +3.063524971e+00 +1.003063525e+03 +1.003063525e+03 +7.4769e-01 +1.6230e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (2.083800000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +7.422356741e+03 +7.630736741e+03 +7.630736741e+03 +5.9671e-01 -3.8264e-02
+2 0 +3.063524971e+00 +2.114435250e+02 +2.114435250e+02 +7.4769e-01 +1.6230e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-1.449600000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +6.610086276e+03 +6.465126276e+03 +6.465126276e+03 +5.9671e-01 -3.8264e-02
+3 0 +4.066341843e+03 +3.921381843e+03 +3.921381843e+03 -1.3415e-01 -1.3414e-01
+6 0 +2.065284413e+03 +1.920324413e+03 +1.920324413e+03 -3.6342e-01 -3.6573e-01
+7 0 +4.275924218e+00 -1.406840758e+02 -1.406840758e+02 +3.4196e-01 -1.8133e+00
+10 0 +2.751292459e+00 -1.422087075e+02 -1.422087075e+02 -8.0802e-01 -1.3123e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-6.300000000000e+00) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +3.909678144e+03 +3.903378144e+03 +3.903378144e+03 +5.9671e-01 -3.8264e-02
+6 0 +3.249599490e+03 +3.243299490e+03 +3.243299490e+03 -3.6342e-01 -3.6573e-01
+7 0 +3.921089900e+00 -2.378910100e+00 -2.378910100e+00 +3.4196e-01 -1.8133e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-1.367600000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +3.909678144e+03 +3.772918144e+03 +3.772918144e+03 +5.9671e-01 -3.8264e-02
+6 0 +3.249599490e+03 +3.112839490e+03 +3.112839490e+03 -3.6342e-01 -3.6573e-01
+7 0 +3.921089900e+00 -1.328389101e+02 -1.328389101e+02 +3.4196e-01 -1.8133e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (3.667500000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +6.610086276e+03 +6.976836276e+03 +6.976836276e+03 +5.9671e-01 -3.8264e-02
+3 0 +4.066341843e+03 +4.433091843e+03 +4.433091843e+03 -1.3415e-01 -1.3414e-01
+6 0 +2.065284413e+03 +2.432034413e+03 +2.432034413e+03 -3.6342e-01 -3.6573e-01
+7 0 +4.275924218e+00 +3.710259242e+02 +3.710259242e+02 +3.4196e-01 -1.8133e+00
+10 0 +2.751292459e+00 +3.695012925e+02 +3.695012925e+02 -8.0802e-01 -1.3123e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-2.486900000000e+02) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +3.909678144e+03 +3.660988144e+03 +3.660988144e+03 +5.9671e-01 -3.8264e-02
+6 0 +3.249599490e+03 +3.000909490e+03 +3.000909490e+03 -3.6342e-01 -3.6573e-01
+7 0 +3.921089900e+00 -2.447689101e+02 -2.447689101e+02 +3.4196e-01 -1.8133e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-6.786000000000e+01) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +7.422356741e+03 +7.354496741e+03 +7.354496741e+03 +5.9671e-01 -3.8264e-02
+2 0 +3.063524971e+00 -6.479647503e+01 -6.479647503e+01 +7.4769e-01 +1.6230e+00
+% f evaluations | g evaluations | best noise-free fitness - Fopt (-2.329000000000e+01) + sum g_i+ | measured fitness | best measured fitness or single-digit g-values | x1 | x2...
+1 0 +4.534624684e+03 +4.511334684e+03 +4.511334684e+03 +5.9671e-01 -3.8264e-02
+2 0 +4.205356173e+00 -1.908464383e+01 -1.908464383e+01 +7.4769e-01 +1.6230e+00
