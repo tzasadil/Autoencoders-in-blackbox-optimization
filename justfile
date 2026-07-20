@@ -1,3 +1,5 @@
+run: sweep-doe plots-doe-sweep optim coco-external coco graphs
+
 run-main:
     uv run python main.py
 
@@ -6,8 +8,6 @@ graphs:
 
 sweep-doe:
     uv run python doe_sweep.py
-
-run: sweep-doe run-main
 
 plots-doe-sweep:
     uv run python doe_sweep_plots.py

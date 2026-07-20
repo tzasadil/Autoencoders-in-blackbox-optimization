@@ -46,8 +46,7 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
             add_if_new(optimizer.ask())
             attempts += 1
 
-        # Exact duplicates are wasted candidates for preselection, but keep a fallback
-        # so candidate generation cannot stall if the sampler collapses numerically.
+        # fill remaining slots even if ask() keeps returning duplicates
         while len(selected) < size:
             selected.append(np.array(optimizer.ask(), copy=True))
 

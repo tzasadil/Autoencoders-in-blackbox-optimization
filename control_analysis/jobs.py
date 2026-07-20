@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy import stats
 
 from control_analysis.constants import EVAL_WINDOW_FUNC_GROUPS, FUNC_GROUP_LABELS, PLAIN_DOE_MODEL, PRIMARY_DOE_MODEL, SELECTOR_BASELINE_MODELS, display_model_label
 try:
@@ -37,8 +38,9 @@ COMPARISON_MODELS = [
 _MODEL_DISPLAY_ORDER = COMPARISON_MODELS
 RANK_METRIC = "final_rank"
 RANK_SOURCE = "last_rank"
-RANK_LABEL = "Final rank percentile"
-RANK_TITLE = "Final rank"
+RANK_LABEL = "Average rank percentile"
+RANK_TITLE = "Average rank"
+DISTANCE_REFERENCE_DIM = 2
 
 
 def _nanmean_array(values: np.ndarray | list[float]) -> float:
@@ -55,6 +57,42 @@ def _ordered_labels(values: pd.Index | list[object], preferred: list[object]) ->
     return ordered + remainder
 
 
+def _table_column_format(column_count: int, first_column_alignment: str = "l") -> str:
+    return first_column_alignment + ("r" * max(0, column_count - 1))
+
+
+def _write_plot_table(
+    df: pd.DataFrame,
+    output_name: str,
+    output_dir: str | os.PathLike[str],
+    first_column_alignment: str = "l",
+) -> Path:
+    output_path = Path(output_dir) / f"{output_name}.tex"
+    return write_dataframe_tabular(
+        df,
+        output_path=output_path,
+        column_format=_table_column_format(len(df.columns), first_column_alignment),
+    )
+
+
+def _write_series_plot_table(
+    series: pd.Series,
+    output_name: str,
+    output_dir: str | os.PathLike[str],
+    index_label: str,
+    value_label: str,
+    first_column_alignment: str = "l",
+) -> Path:
+    export_df = series.reset_index()
+    export_df = export_df.rename(columns={export_df.columns[0]: index_label, export_df.columns[1]: value_label})
+    return _write_plot_table(
+        export_df,
+        output_name=output_name,
+        output_dir=output_dir,
+        first_column_alignment=first_column_alignment,
+    )
+
+
 def _plot_metric_bar(
     summary: pd.DataFrame,
     value_column: str,
@@ -62,6 +100,9 @@ def _plot_metric_bar(
     ylabel: str,
     output_name: str,
     output_dir: str | os.PathLike[str],
+    index_mapper=None,
+    table_index_label: str | None = None,
+    table_value_label: str | None = None,
 ) -> Path | None:
     if summary.empty:
         return None
@@ -69,9 +110,23 @@ def _plot_metric_bar(
     plotting_df = plotting_df.dropna(subset=[value_column])
     if plotting_df.empty:
         return None
-    ax = bar(plotting_df, y_name=value_column, index_mapper=display_model_label)
+    if index_mapper is not None:
+        plotting_df.index = plotting_df.index.map(index_mapper)
+        plotting_df = plotting_df.sort_index()
+    index_column_name = table_index_label or (
+        str(plotting_df.index.name).replace("_", " ").title()
+        if plotting_df.index.name is not None
+        else "Label"
+    )
+    value_column_name = table_value_label or ylabel
+    export_df = plotting_df.reset_index()
+    export_df = export_df.rename(columns={export_df.columns[0]: index_column_name, value_column: value_column_name})
+    _write_plot_table(export_df, output_name=output_name, output_dir=output_dir)
+    ax = bar(plotting_df, y_name=value_column)
     ax.set_title(title)
     ax.set_ylabel(ylabel)
+    if "func_group" in output_name or "selector_baseline" in output_name:
+        two_layer_tics(ax)
     return save_and_show(output_name, show=False, output_dir=output_dir)
 
 
@@ -82,9 +137,17 @@ def _plot_generation_progress(
     ylabel: str,
     output_name: str,
     output_dir: str | os.PathLike[str],
+    table_value_label: str | None = None,
 ) -> Path | None:
     if summary.empty:
         return None
+    export_df = summary[["generation_fraction", value_column]].rename(
+        columns={
+            "generation_fraction": "Generation fraction",
+            value_column: table_value_label or ylabel,
+        }
+    )
+    _write_plot_table(export_df, output_name=output_name, output_dir=output_dir, first_column_alignment="r")
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(summary["generation_fraction"], summary[value_column], color="forestgreen", linewidth=2)
     ax.set_title(title)
@@ -93,6 +156,139 @@ def _plot_generation_progress(
     ax.set_xlim(0, 1)
     ax.grid(axis="y", alpha=0.3)
     return save_and_show(output_name, show=False, output_dir=output_dir)
+
+
+def _flatten_metric_pairs(df: pd.DataFrame, x_column: str, y_column: str) -> tuple[np.ndarray, np.ndarray]:
+    x_arrays: list[np.ndarray] = []
+    y_arrays: list[np.ndarray] = []
+    for x_values, y_values in zip(df[x_column].tolist(), df[y_column].tolist()):
+        x_array = np.asarray(x_values, dtype=float)
+        y_array = np.asarray(y_values, dtype=float)
+        if x_array.ndim != 1 or y_array.ndim != 1 or x_array.size == 0 or y_array.size == 0:
+            continue
+        pair_count = min(x_array.size, y_array.size)
+        if pair_count == 0:
+            continue
+        x_arrays.append(x_array[:pair_count])
+        y_arrays.append(y_array[:pair_count])
+    if not x_arrays:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    xs = np.concatenate(x_arrays)
+    ys = np.concatenate(y_arrays)
+    finite_mask = np.isfinite(xs) & np.isfinite(ys)
+    return xs[finite_mask], ys[finite_mask]
+
+
+def _flatten_distance_correlation_pairs(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    x_arrays: list[np.ndarray] = []
+    y_arrays: list[np.ndarray] = []
+    dim_arrays: list[np.ndarray] = []
+    for dim, x_values, y_values in zip(df["dim"].tolist(), df["dists"].tolist(), df["spearman_corr"].tolist()):
+        x_array = np.asarray(x_values, dtype=float)
+        y_array = np.asarray(y_values, dtype=float)
+        if x_array.ndim != 1 or y_array.ndim != 1 or x_array.size == 0 or y_array.size == 0:
+            continue
+        pair_count = min(x_array.size, y_array.size)
+        if pair_count == 0:
+            continue
+        x_arrays.append(x_array[:pair_count])
+        y_arrays.append(y_array[:pair_count])
+        dim_arrays.append(np.full(pair_count, int(dim), dtype=int))
+    if not x_arrays:
+        empty = np.array([], dtype=float)
+        return empty, empty, np.array([], dtype=int)
+    xs = np.concatenate(x_arrays)
+    ys = np.concatenate(y_arrays)
+    dims = np.concatenate(dim_arrays)
+    finite_mask = np.isfinite(xs) & np.isfinite(ys)
+    return xs[finite_mask], ys[finite_mask], dims[finite_mask]
+
+
+def _normalize_distances_to_reference_dim(xs: np.ndarray, dim: int) -> np.ndarray:
+    return xs * np.sqrt(DISTANCE_REFERENCE_DIM / dim)
+
+
+def _build_distance_correlation_summary(xs: np.ndarray, ys: np.ndarray) -> pd.DataFrame:
+    regression = stats.linregress(xs, ys)
+    spearman = stats.spearmanr(xs, ys)
+    thresholds = [0.05, 0.10, 0.20]
+    rows = [
+        ("Pair count", float(xs.size)),
+        (f"Distance min (normalized to {DISTANCE_REFERENCE_DIM}D)", float(np.min(xs))),
+        (f"Distance mean (normalized to {DISTANCE_REFERENCE_DIM}D)", float(np.mean(xs))),
+        (f"Distance median (normalized to {DISTANCE_REFERENCE_DIM}D)", float(np.median(xs))),
+        (f"Distance p90 (normalized to {DISTANCE_REFERENCE_DIM}D)", float(np.quantile(xs, 0.90))),
+        (f"Distance max (normalized to {DISTANCE_REFERENCE_DIM}D)", float(np.max(xs))),
+        ("Correlation min", float(np.min(ys))),
+        ("Correlation mean", float(np.mean(ys))),
+        ("Correlation median", float(np.median(ys))),
+        ("Correlation p90", float(np.quantile(ys, 0.90))),
+        ("Correlation max", float(np.max(ys))),
+        ("Linear slope", float(regression.slope)),
+        ("Linear intercept", float(regression.intercept)),
+        ("Pearson r", float(regression.rvalue)),
+        ("R^2", float(regression.rvalue**2)),
+        ("Linear p-value", float(regression.pvalue)),
+        ("Spearman rho", float(spearman.statistic)),
+        ("Spearman p-value", float(spearman.pvalue)),
+    ]
+    rows.extend(
+        (
+            f"Share normalized distance <= {threshold:0.2f}",
+            float(np.mean(xs <= threshold)),
+        )
+        for threshold in thresholds
+    )
+    return pd.DataFrame(rows, columns=["Statistic", "Value"])
+
+
+def _render_distance_correlation_graphs(
+    df_og: pd.DataFrame,
+    output_dir: str | os.PathLike[str],
+) -> dict[str, Path]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    doe_rows = df_og[df_og["model"] == PRIMARY_DOE_MODEL].copy()
+    if doe_rows.empty or "dists" not in doe_rows.columns or "spearman_corr" not in doe_rows.columns:
+        return {}
+
+    results: dict[str, Path] = {}
+    dim_specs: list[tuple[int | None, str, str]] = [
+        (2, "dim_2", "Dimension 2"),
+        (5, "dim_5", "Dimension 5"),
+        (10, "dim_10", "Dimension 10"),
+        (None, "All", "All dimensions"),
+    ]
+    for dim, output_name, title in dim_specs:
+        filtered = doe_rows if dim is None else doe_rows[doe_rows["dim"] == dim]
+        xs, ys, dims = _flatten_distance_correlation_pairs(filtered)
+        if xs.size < 2:
+            continue
+        if dim is None:
+            xs = xs * np.sqrt(DISTANCE_REFERENCE_DIM / dims)
+        else:
+            xs = _normalize_distances_to_reference_dim(xs, dim)
+        regression = stats.linregress(xs, ys)
+        figure, ax = plt.subplots()
+        ax.scatter(xs, ys, marker=".", alpha=0.35, s=9)
+        line_x = np.linspace(float(np.min(xs)), float(np.max(xs)), num=100)
+        ax.plot(line_x, regression.slope * line_x + regression.intercept, color="red")
+        ax.set_title(title)
+        ax.set_xlabel(f"Latent space Euclidean distance normalized to {DISTANCE_REFERENCE_DIM}D")
+        ax.set_ylabel("Spearman rank correlation")
+        summary_text = "\n".join(
+            [
+                f"R^2 = {regression.rvalue**2:0.3f}",
+                f"slope = {regression.slope:0.3f}",
+                f"pairs = {xs.size}",
+            ]
+        )
+        ax.annotate(summary_text, (0.65, 0.05), xycoords="axes fraction")
+        figure_path = save_and_show(output_name, show=False, output_dir=output_path)
+        summary_df = _build_distance_correlation_summary(xs, ys)
+        _write_plot_table(summary_df, output_name=output_name, output_dir=output_path)
+        results[output_name] = figure_path
+    return results
 
 
 def _build_problem_metric_summary(df_og: pd.DataFrame) -> pd.DataFrame:
@@ -188,6 +384,9 @@ def _render_model_breakdown_graphs(per_problem: pd.DataFrame, output_dir: str | 
                 ylabel=ylabel,
                 output_name=f"{slug}_{dim_label}",
                 output_dir=output_dir,
+                index_mapper=display_model_label,
+                table_index_label="Model",
+                table_value_label=ylabel,
             )
             if path is not None:
                 paths[f"{slug}_{dim_label}"] = path
@@ -236,8 +435,8 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     doe_oracle_regret_by_fraction = _build_generation_fraction_summary(df_og, "oracle_regret", "avg_oracle_regret")
 
     bar_specs = [
-        (doe_by_func_group, RANK_METRIC, "DOE final rank by function group", RANK_LABEL, "doe_avg_rank_by_func_group"),
-        (doe_by_dim, RANK_METRIC, "DOE final rank by dimension", RANK_LABEL, "doe_avg_rank_by_dim"),
+        (doe_by_func_group, RANK_METRIC, "DOE average rank by function group", RANK_LABEL, "doe_avg_rank_by_func_group"),
+        (doe_by_dim, RANK_METRIC, "DOE average rank by dimension", RANK_LABEL, "doe_avg_rank_by_dim"),
         (doe_by_func_group, "avg_spearman_corr", "DOE surrogate correlation by function group", "Average Spearman correlation", "doe_spearman_by_func_group"),
         (doe_by_dim, "avg_spearman_corr", "DOE surrogate correlation by dimension", "Average Spearman correlation", "doe_spearman_by_dim"),
         (doe_by_func_group, "avg_selected_spread_ratio", "DOE selected-set spread ratio by function group", "Selected/all pairwise spread", "doe_selected_spread_ratio_by_func_group"),
@@ -249,7 +448,17 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
     ]
 
     for summary, value_column, title, ylabel, output_name in bar_specs:
-        path = _plot_metric_bar(summary, value_column=value_column, title=title, ylabel=ylabel, output_name=output_name, output_dir=output_dir)
+        table_index_label = "Function group" if "func_group" in output_name else "Dimension"
+        path = _plot_metric_bar(
+            summary,
+            value_column=value_column,
+            title=title,
+            ylabel=ylabel,
+            output_name=output_name,
+            output_dir=output_dir,
+            table_index_label=table_index_label,
+            table_value_label=ylabel,
+        )
         if path is not None:
             paths[output_name] = path
 
@@ -260,6 +469,7 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
         ylabel="Average Spearman correlation",
         output_name="doe_spearman_by_generation_fraction",
         output_dir=output_dir,
+        table_value_label="Average Spearman correlation",
     )
     if generation_path is not None:
         paths["doe_spearman_by_generation_fraction"] = generation_path
@@ -278,6 +488,7 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
             ylabel=ylabel,
             output_name=output_name,
             output_dir=output_dir,
+            table_value_label=ylabel,
         )
         if path is not None:
             paths[output_name] = path
@@ -286,26 +497,44 @@ def _render_doe_focus_graphs(per_problem: pd.DataFrame, df_og: pd.DataFrame, out
 
 
 def _render_selector_baseline_graph(df_og: pd.DataFrame, output_dir: str | os.PathLike[str]) -> Path | None:
-    selector_df = df_og[df_og["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
+    selector_models = [
+        "oracle",
+        "cluster_best_half_oracle",
+        "none",
+        PRIMARY_DOE_MODEL,
+        "cluster_random_half",
+        "negative_oracle",
+    ]
+    selector_df = df_og[df_og["model"].isin(selector_models)].copy()
     if selector_df.empty:
         summary = load_selector_baseline_ranks()
         if summary is None:
             return None
         summary = summary.rename(index=display_model_label)
     else:
-        if RANK_SOURCE not in selector_df.columns:
-            selector_df[RANK_SOURCE] = selector_df["ranks"].apply(lambda values: values[-1])
-        summary = selector_df.groupby("model", as_index=False).agg(final_rank=(RANK_SOURCE, "mean"))
-        order = _ordered_labels(summary["model"].tolist(), SELECTOR_BASELINE_MODELS)
+        if "avg_rank" not in selector_df.columns:
+            selector_df["avg_rank"] = selector_df["ranks"].apply(np.mean)
+        summary = selector_df.groupby("model", as_index=False).agg(avg_rank=("avg_rank", "mean"))
+        order = _ordered_labels(summary["model"].tolist(), selector_models)
         summary = summary.set_index("model").loc[order]
         summary = summary.rename(index=display_model_label)
+    oracle_export = summary.reset_index().rename(
+        columns={"index": "Model", "avg_rank": "Average rank percentile"}
+    )
+    write_dataframe_tabular(
+        oracle_export,
+        Path(output_dir).parent / "oracle_experiment.tex",
+        "lr",
+    )
     return _plot_metric_bar(
         summary,
-        value_column=RANK_METRIC,
-        title="Selector baseline comparison, all dims",
+        value_column="avg_rank",
+        title="Selector diagnostic comparison, all dims",
         ylabel=RANK_LABEL,
         output_name="selector_baseline_avg_rank_all_dims",
         output_dir=output_dir,
+        table_index_label="Model",
+        table_value_label=RANK_LABEL,
     )
 
 
@@ -322,6 +551,9 @@ def _render_runtime_graph(df_og: pd.DataFrame, output_dir: str | os.PathLike[str
         ylabel="Total runtime (s)",
         output_name="total_runtime_by_model",
         output_dir=output_dir,
+        index_mapper=display_model_label,
+        table_index_label="Model",
+        table_value_label="Total runtime (s)",
     )
 
 
@@ -386,11 +618,11 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     ).sort_values("func_group_key")
 
     doe_by_dim_export = doe_by_dim.rename(
-        columns={"dim": "Dimension", "doe_final_rank": "DOE final rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
-    )[["Dimension", "DOE final rank", "DOE - baseline", "DOE rank"]]
+        columns={"dim": "Dimension", "doe_final_rank": "DOE avg. rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
+    )[["Dimension", "DOE avg. rank", "DOE - baseline", "DOE rank"]]
     doe_by_func_group_export = doe_by_func_group.rename(
-        columns={"func_group": "Function group", "doe_final_rank": "DOE final rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
-    )[["Function group", "DOE final rank", "DOE - baseline", "DOE rank"]]
+        columns={"func_group": "Function group", "doe_final_rank": "DOE avg. rank", "vs_baseline": "DOE - baseline", "mean_rank": "DOE rank"}
+    )[["Function group", "DOE avg. rank", "DOE - baseline", "DOE rank"]]
 
     dim_table_path = write_dataframe_tabular(doe_by_dim_export, output_path / "doe_by_dim_summary.tex", "rccc")
     group_table_path = write_dataframe_tabular(doe_by_func_group_export, output_path / "doe_by_func_group_summary.tex", "lccc")
@@ -426,21 +658,37 @@ def run_doe_group_analysis(df_og: pd.DataFrame, output_dir: str | os.PathLike[st
     axes[1].set_ylabel("Function group")
     fig.savefig(heatmap_path, bbox_inches="tight")
     plt.close(fig)
+    heatmap_export = doe_group_eval.rename(
+        columns={
+            "func_group": "Function group",
+            "dim": "Dimension",
+            "vs_baseline": "DOE - baseline",
+            "model_rank": "DOE rank",
+        }
+    )[["Function group", "Dimension", "DOE - baseline", "DOE rank"]]
+    heatmap_table_path = _write_plot_table(
+        heatmap_export,
+        output_name="doe_group_heatmaps",
+        output_dir=output_path,
+    )
 
     model_breakdown_paths = _render_model_breakdown_graphs(per_problem_metrics, output_dir=output_path)
     doe_focus_paths = _render_doe_focus_graphs(per_problem_metrics, analysis_df, output_dir=output_path)
     selector_baseline_path = _render_selector_baseline_graph(df_og, output_dir=output_path)
     runtime_path = _render_runtime_graph(analysis_df, output_dir=output_path)
+    dist_corr_paths = _render_distance_correlation_graphs(analysis_df, output_dir=output_path.parent / "dist_corr")
 
     result: dict[str, Path | pd.DataFrame] = {
         "dim_table_path": dim_table_path,
         "group_table_path": group_table_path,
         "heatmap_path": heatmap_path,
+        "heatmap_table_path": heatmap_table_path,
         "doe_by_dim": doe_by_dim_export,
         "doe_by_func_group": doe_by_func_group_export,
     }
     result.update({key: value for key, value in model_breakdown_paths.items()})
     result.update({key: value for key, value in doe_focus_paths.items()})
+    result.update({key: value for key, value in dist_corr_paths.items()})
     if selector_baseline_path is not None:
         result["selector_baseline_avg_rank_all_dims"] = selector_baseline_path
     if runtime_path is not None:
@@ -567,7 +815,15 @@ def run_eval_window_graphs(
 
 
 def plot_full_desc_ranking(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    ax = bar(bundle.df_og, "full_desc")
+    grouped = default_groupby(bundle.df_og, "full_desc")
+    _write_series_plot_table(
+        grouped["avg_rank"],
+        output_name="full_desc_ranking",
+        output_dir=output_dir,
+        index_label="Configuration",
+        value_label="Average rank percentile",
+    )
+    ax = bar(grouped)
     for tick in ax.xaxis.get_major_ticks()[1::2]:
         tick.set_pad(15)
     plt.xticks(size=5)
@@ -577,32 +833,19 @@ def plot_full_desc_ranking(bundle: ControlDataBundle, output_dir: str | os.PathL
 
 
 def plot_pure_population_size(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    ax = bar(bundle.pures, "pop_size")
+    grouped = default_groupby(bundle.pures, "pop_size")
+    _write_series_plot_table(
+        grouped["avg_rank"],
+        output_name="pure_population_size",
+        output_dir=output_dir,
+        index_label="Population size",
+        value_label="Average rank percentile",
+        first_column_alignment="r",
+    )
+    ax = bar(grouped)
     ax.set_xlabel("Population Size")
     ax.set_title("Normal Evaluation")
     return save_and_show("pure_population_size", show=False, output_dir=output_dir)
-
-
-def plot_pca_ratio_gp(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path | None:
-    if bundle.pca_df.empty:
-        return None
-    df = bundle.pca_df[bundle.pca_df["scale_train"] == False].copy()
-    df = df[(df["model"] == "gp") & (df["pop_size"] == 64)]
-    if df.empty:
-        return None
-    df["pca_ratio"] = df["dim_red"].map(lambda value: str(value).removeprefix("pca"))
-    df1 = bundle.df_og[
-        (bundle.df_og["model"] == "gp")
-        & (bundle.df_og["dim_red_kind"] == "none")
-        & (bundle.df_og["pop_size"] == 64)
-        & (bundle.df_og["true_ratio"].map(Fraction) == Fraction(1, 8))
-    ].iloc[0].copy()
-    df1["pca_ratio"] = str(1.0)
-    df.loc[str(len(df))] = df1
-    ax = bar(df, "pca_ratio", regr=True, baseline_i=8, baselines=bundle.baselines)
-    ax.set_xlabel("pca reduction ratio")
-    ax.set_title("PCA + GP")
-    return save_and_show("pca_ratio_gp", show=False, output_dir=output_dir)
 
 
 def plot_gp_true_evaluations_by_population(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
@@ -611,6 +854,15 @@ def plot_gp_true_evaluations_by_population(bundle: ControlDataBundle, output_dir
     df = default_groupby(df, ["true_evaluations", "pop_size"])
     pures2 = bundle.pures.set_index(bundle.pures["pop_size"].map(lambda value: (value, value)))
     df = pd.concat([df, pures2])
+    export_df = df["avg_rank"].reset_index()
+    export_df = export_df.rename(
+        columns={
+            "true_evaluations": "True evaluations",
+            "pop_size": "Population size",
+            "avg_rank": "Average rank percentile",
+        }
+    )
+    _write_plot_table(export_df, output_name="gp_true_evaluations_by_population", output_dir=output_dir, first_column_alignment="r")
     bar(df, print_table=False)
     return save_and_show("gp_true_evaluations_by_population", show=False, output_dir=output_dir)
 
@@ -618,7 +870,15 @@ def plot_gp_true_evaluations_by_population(bundle: ControlDataBundle, output_dir
 
 
 def plot_elapsed_time_by_dim_red_kind(bundle: ControlDataBundle, output_dir: str | os.PathLike[str] = "graphs") -> Path:
-    ax = bar(bundle.df_og.copy(), "dim_red_kind", "elapsed_time")
+    grouped = default_groupby(bundle.df_og.copy(), "dim_red_kind")
+    _write_series_plot_table(
+        grouped["elapsed_time"],
+        output_name="elapsed_time_by_dim_red_kind",
+        output_dir=output_dir,
+        index_label="Dimensionality reduction kind",
+        value_label="Iteration time (ms)",
+    )
+    ax = bar(grouped, y_name="elapsed_time")
     ax.set_ylabel("Iteration Time (ms)")
     return save_and_show("elapsed_time_by_dim_red_kind", show=False, output_dir=output_dir)
 
@@ -627,7 +887,17 @@ def plot_model_comparison(bundle: ControlDataBundle, output_dir: str | os.PathLi
     df = bundle.df_og.copy()
     df = df[(df["dim_red_kind"] == "none") & (df["pop_size"] == 48) & (df["true_ratio"].map(Fraction) == Fraction(1, 8))]
     df = df[~df["model"].isin(SELECTOR_BASELINE_MODELS)].copy()
-    ax = bar(df, "model", index_mapper=display_model_label)
+    grouped = default_groupby(df, "model")
+    grouped.index = grouped.index.map(display_model_label)
+    grouped = grouped.sort_index()
+    _write_series_plot_table(
+        grouped["avg_rank"],
+        output_name="model_comparison",
+        output_dir=output_dir,
+        index_label="Model",
+        value_label="Average rank percentile",
+    )
+    ax = bar(grouped)
     two_layer_tics(ax)
     return save_and_show("model_comparison", show=False, output_dir=output_dir)
 
@@ -640,7 +910,6 @@ def plot_model_comparison(bundle: ControlDataBundle, output_dir: str | os.PathLi
 NAMED_PLOT_JOBS = {
     "full_desc_ranking": plot_full_desc_ranking,
     "pure_population_size": plot_pure_population_size,
-    "pca_ratio_gp": plot_pca_ratio_gp,
     "gp_true_evaluations_by_population": plot_gp_true_evaluations_by_population,
     "elapsed_time_by_dim_red_kind": plot_elapsed_time_by_dim_red_kind,
     "model_comparison": plot_model_comparison,

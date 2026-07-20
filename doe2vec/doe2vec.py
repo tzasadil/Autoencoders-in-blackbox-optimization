@@ -183,24 +183,10 @@ class doe_model:
         precompile_bank_functions=True,
         autoencoder_batch_divisor=20,
     ):
-        """Doe2Vec model to transform Design of Experiments to feature vectors.
+        """Encode local DOEs with a VAE and pick a nearby bank function as surrogate.
 
-        Args:
-            inp_size (int): Base number of DOE points per problem dimension.
-            latent_dim (int): Latent width multiplier used by the VAE encoder/decoder.
-            n_functions (int, optional): Number of generated training functions to keep in the bank.
-            seed_nr (int, optional): Random seed used for generated functions and Sobol sampling.
-            kl_weight (float, optional): KL penalty weight used when training the VAE.
-            preserve_input_order (bool, optional): Reorder local DOE points to stay aligned with the previous round.
-            drop_duplicate_points (bool, optional): Remove repeated x locations before building the local DOE.
-            point_selection (str, optional): Local point selection strategy, either "local_diverse" or "local_nearest".
-            transform_maxfev (int, optional): Function-evaluation budget for the local transform fit of each bank function. Defaults to 40.
-            translation_bound (float, optional): Per-coordinate bound for the fitted translation in normalized coordinates.
-            use_transform_fitting (bool, optional): Whether to align each bank function with a local rotate+translate fit.
-            selector_mode (str, optional): Function selection rule, either "latent" or "fitted_loss".
-            precompile_bank_functions (bool, optional): Whether to JIT-compile each loaded bank function
-                for the current DOE input shape before the optimization loop starts.
-            autoencoder_batch_divisor (int, optional): Scales the VAE batch size as corpus_size / divisor.
+        point_selection: "local_diverse" or "local_nearest".
+        selector_mode: "latent" or "fitted_loss".
         """
         self.inp_size_base = inp_size
         self.n_functions = n_functions
@@ -253,7 +239,7 @@ class doe_model:
     def _drop_duplicate_points(self, train_x, train_y):
         if len(train_x) == 0:
             return train_x, train_y
-        # Repeated evaluations at the same location do not add DOE shape information.
+        # drop duplicate x's; they don't change the DOE shape
         _, unique_idx = np.unique(train_x, axis=0, return_index=True)
         unique_idx = np.sort(unique_idx)
         return train_x[unique_idx], train_y[unique_idx]
@@ -264,7 +250,7 @@ class doe_model:
 
         center = np.asarray(center).reshape(1, -1)
         dist_to_center = np.linalg.norm(train_x - center, axis=1)
-        # Keep the DOE local to the current CMA state before enforcing diversity.
+        # first restrict to a neighborhood of the CMA mean
         candidate_count = min(len(train_x), max(self.inp_size * 4, self.inp_size + 1))
         candidate_idx = np.argsort(dist_to_center)[:candidate_count]
         candidate_x = train_x[candidate_idx]
@@ -279,7 +265,7 @@ class doe_model:
 
         while len(selected) < self.inp_size:
             min_pairwise_dist[selected] = -np.inf
-            # Prefer points that expand x-space coverage, but bias slightly toward the CMA center.
+            # max-min distance, with a small pull toward the center
             score = min_pairwise_dist - 0.05 * candidate_center_dist
             next_idx = int(np.argmax(score))
             if not np.isfinite(score[next_idx]):
@@ -620,7 +606,7 @@ class doe_model:
         target_values = np.asarray(closest_ys, dtype=float).reshape(-1)
         normalized_target_values = self._normalize_value_row(target_values)
 
-        # Keep point-to-index correspondence stable only in the improved variant.
+        # match previous DOE order when preserve_input_order is on
         if self.preserve_input_order and self.old_xs is not None:
             dist_matrix = distance_matrix(self.old_xs, xs)
             _row_ind, col_ind = linear_sum_assignment(dist_matrix)

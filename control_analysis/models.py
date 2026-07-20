@@ -10,7 +10,6 @@ class ControlDataBundle:
     df_og: pd.DataFrame
     pures: pd.DataFrame
     baselines: pd.DataFrame
-    pca_df: pd.DataFrame
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import textwrap
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -94,10 +95,13 @@ def bar(
     return ax
 
 
-def two_layer_tics(ax: plt.Axes) -> None:
-    plt.xticks(rotation=0, size="xx-small")
+def two_layer_tics(ax: plt.Axes, pad: float = 40, wrap_width: int = 16) -> None:
+    """Stagger every second x tick downward so long labels do not overlap."""
+    wrapped = [textwrap.fill(label.get_text(), width=wrap_width) for label in ax.get_xticklabels()]
+    ax.set_xticklabels(wrapped, size="xx-small")
+    ax.tick_params(axis="x", labelrotation=0, labelsize="xx-small")
     for tick in ax.xaxis.get_major_ticks()[1::2]:
-        tick.set_pad(15)
+        tick.set_pad(pad)
 
 
 def save_and_show(name: str, show: bool = True, output_dir: str | os.PathLike[str] = "graphs") -> Path:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import os
-from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -116,12 +115,5 @@ def load_control_bundle(data_dir: str | os.PathLike[str] | None = None) -> Contr
     df_og = compute_control_ranks(df_og)
     pure_mask = df_og["gen_mult"].map(int) == 1
     pures = df_og[pure_mask].copy()
-    pca_mask = (
-        (df_og["model"] == "gp")
-        & (df_og["dim_red_kind"] == "pca")
-        & (df_og["pop_size"].isin([48, 64]))
-        & (df_og["true_ratio"].map(Fraction) == Fraction(1, 8))
-    )
-    pca_df = df_og[pca_mask].copy()
     baselines = default_groupby(pures, ["pop_size"])
-    return ControlDataBundle(df_og=df_og, pures=pures, baselines=baselines, pca_df=pca_df)
+    return ControlDataBundle(df_og=df_og, pures=pures, baselines=baselines)
