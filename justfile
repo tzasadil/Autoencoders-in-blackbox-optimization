@@ -6,6 +6,10 @@ run-main:
 graphs:
     uv run control-graphs all
 
+# Record 2D preselection traces and render them as a GIF.
+animate *args:
+    uv run python preselection_animation.py all {{args}}
+
 sweep-doe:
     uv run python doe_sweep.py
 

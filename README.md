@@ -25,6 +25,15 @@ Higher is better. At each evaluation step, every model gets a rank percentile ag
 
 Per-group charts (separable, ill-conditioned, multimodal), early-budget charts, and selector diagnostics are in `graphs/`.
 
+### Preselection, animated
+
+![CMA-ES with four preselection strategies on 2D Rastrigin](graphs/animation/f15_d2_i1.gif)
+
+One run on f15 (rotated Rastrigin), 2D, instance 1. Each generation, the surrogate panels sample twice the population and the surrogate picks half. Plain CMA-ES evaluates every sample. Filled dots get a true evaluation, hollow dots are rejected, and the ellipse is the search distribution (2 sigma). The star is the global optimum. Each panel zooms to follow its own search and keeps the optimum in view.
+
+- NN, DOE, and even the oracle (which knows the true values) all end in a neighboring local basin. Plain CMA-ES reaches the optimum.
+- One run is an illustration, not evidence. In 2D, plain CMA-ES also ranks above every surrogate on average (64.5, `graphs/avgs/avg_rank_dim_2.png`). NN wins overall because of 5D and 10D.
+
 ## Run
 
 Results land in `data/` (CSV). COCO post-processing goes to `ppdata/`, plots to `graphs/`.
@@ -44,6 +53,7 @@ Individual targets:
 - `just optim` / `just run-main`: full optimization (`optim` entrypoint or `main.py`)
 - `just coco-external` / `just coco`: external reference bundle / post-process this repo's runs
 - `just graphs`: control / thesis analysis plots
+- `just animate`: record traces to `data/traces/` and render the GIF to `graphs/animation/`. Pick a problem with `just animate --function 8 --instance 2`. `uv run python preselection_animation.py render` re-renders without rerunning the optimizer.
 
 Default BBOB slice is functions 1-24, dims 2/5/10, instances 1-10, budget `250 * dim`. `just optim` runs one worker per model by default.
 

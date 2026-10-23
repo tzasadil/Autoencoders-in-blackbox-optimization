@@ -482,6 +482,19 @@ def run(
     return df
 
 
+def build_surrogate(model_f, dim_red_f, surrogate_kwargs, dim):
+    global cached_doe_functions
+    if isinstance(model_f, doe_model):
+        # Share the generated function bank across DOE variants and dimensions.
+        model_f.functions = cached_doe_functions
+        surrogate = model_f.load_or_create(dim)
+        cached_doe_functions = model_f.functions
+        return surrogate
+    if isinstance(model_f, models.SelectionPolicy):
+        return model_f
+    return models.Surrogate(model_f, dim_red_f, **surrogate_kwargs)
+
+
 def single_config(
     config,
     problem_info,
@@ -561,14 +574,7 @@ def single_config(
             if not df_filtered_local.empty:  # check if this run is duplicate:
                 continue
 
-        if isinstance(model_f, doe_model):
-            model_f.functions = cached_doe_functions
-            surrogate = model_f.load_or_create(dim)
-            cached_doe_functions = model_f.functions
-        elif isinstance(model_f, models.SelectionPolicy):
-            surrogate = model_f
-        else:
-            surrogate = models.Surrogate(model_f, dim_red_f, **surrogate_kwargs)
+        surrogate = build_surrogate(model_f, dim_red_f, surrogate_kwargs, dim)
         observer.observe(problem)
         start_time = timer()
         pop_none = 5 * dim

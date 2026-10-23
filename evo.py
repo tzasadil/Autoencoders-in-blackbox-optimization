@@ -9,7 +9,7 @@ from scipy import stats
 import cocoex
 
 
-def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=True,seed = 42):
+def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=True,seed = 42, trace=None):
     rng = np.random.default_rng()
     cloned_problem = cocoex.Suite("bbob", '', '').get_problem_by_function_dimension_instance(*problem.id_triple)
     optimizer= None
@@ -160,6 +160,22 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
             rank_scores += rng_local.random(sample_count) * 1e-6
         return selected_indices, rank_scores
 
+    def record_generation(pool, picked_idx):
+        # Call before eval_true: it can restart the optimizer, and the trace
+        # must show the distribution that sampled this pool.
+        if trace is None:
+            return
+        trace.append({
+            "mean": optimizer._mean.tolist(),
+            "cov": (optimizer._sigma ** 2 * optimizer._C).tolist(),
+            "pool": np.asarray(pool).tolist(),
+            "picked": np.asarray(picked_idx).tolist(),
+        })
+
+    def record_best():
+        if trace is not None:
+            trace[-1]["best"] = float(overall_best)
+
     def eval_true(xs):
         nonlocal true_evals_left,true_evals,bests,bests_evals,printing,best,problem,true_xs,true_ys,evals_wihout_change,optimizer,overall_best,best_x,overall_best_x
         ys = np.array([problem(x) for x in xs])
@@ -212,7 +228,9 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
 
         while True:
             xs = next_gen(optimizer_popsize)
+            record_generation(xs, np.arange(len(xs)))
             ys = eval_true(xs)
+            record_best()
             optimizer.tell(list(zip(xs,ys)))
             if len (true_ys) >= surrogate.inp_size or true_evals_left <= 0:
                 break
@@ -253,7 +271,9 @@ def optimize(problem, surrogate, pop_size, true_evals, gen_mult:int, printing=Tr
             top_k_true_from_pool = correct_ys[idx][:k_accepted]
             rejected_true_from_pool = correct_ys[ordering][k_accepted:]
             oracle_best_true = np.sort(correct_ys)[:k_accepted]
+            record_generation(xs, idx[:k_accepted])
             top_k_ys = eval_true(top_k_xs)
+            record_best()
             if true_evals_left >0: # at the end of algo; optim complains the solutions have diff len than popsize; wont continue, so no need to tell optimizer anyway
                 optimizer.tell(list(zip(top_k_xs,top_k_ys)))
                 surrogate.train(true_xs,true_ys, opt=optimizer)
